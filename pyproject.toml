@@ -12,16 +12,53 @@ authors = [
   {email = "zhulikovnikita884@gmail.com", name = "nikitazulikov"}
 ]
 dependencies = [
+  "aiohttp (>=3.13.3,<4.0.0)",
   "black (>=26.3.1,<27.0.0)",
+  "fastapi (>=0.128.0,<0.129.0)",
   "flake8 (>=7.3.0,<8.0.0)",
   "flake8-pyproject (>=1.2.4,<2.0.0)",
   "isort (>=8.0.1,<9.0.0)",
   "mypy (>=1.20.2,<2.0.0)",
+  "pydantic-settings (>=2.12.0,<3.0.0)",
   "pylint (>=4.0.5,<5.0.0)",
-  "toml-sort (>=0.24.4,<0.25.0)"
+  "python-dotenv (>=1.2.1,<2.0.0)",
+  "toml-sort (>=0.24.4,<0.25.0)",
+  "uvicorn (>=0.40.0,<0.41.0)"
 ]
 description = ""
 name = "salebot-telegram-egeland"
 readme = "README.md"
 requires-python = ">=3.12"
 version = "0.1.0"
+
+[tool.flake8]
+exclude = [
+  "./.mypy_cache/*,",
+  "./.venv/*",
+  ".DS_Store",
+  ".git",
+  ".tox",
+  "__pycache__"
+]
+ignore = ["E203", "E501", "E704", "W503"]
+max-line-length = 128
+plugins = ["flake8-pyproject"]
+
+[tool.isort]
+profile = "black"
+
+[tool.mypy]
+check_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_calls = true
+disallow_untyped_defs = true
+follow_imports_for_stubs = true
+ignore_missing_imports = true
+local_partial_types = true
+namespace_packages = true
+pretty = true
+show_error_context = true
+warn_redundant_casts = true
+warn_return_any = true
+warn_unused_configs = true
+warn_unused_ignores = true
