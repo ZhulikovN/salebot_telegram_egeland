@@ -8,7 +8,7 @@ Group=ubuntu
 
 WorkingDirectory=/home/ubuntu/salebot_telegram_egeland/current
 
-ExecStart=/home/ubuntu/.cache/pypoetry/virtualenvs/salebot-telegram-egeland-XXXXXXXX-py3.12/bin/uvicorn app.main:app --host 127.0.0.1 --port 8012 --workers 2
+ExecStart=/home/ubuntu/.cache/pypoetry/virtualenvs/salebot-telegram-egeland-WxobCIUq-py3.12/bin/uvicorn app.main:app --host 0.0.0.0 --port 8024 --workers 1
 
 Restart=always
 RestartSec=5
