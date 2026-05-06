@@ -429,33 +429,37 @@ class AmoCRMClient:
     async def check_duplicate_lead(
         self,
         contact_id: int,
+        pipeline_id: int | None = None,
     ) -> dict[str, Any] | None:
         """
-        Найти любую открытую сделку у контакта (в любой воронке).
+        Найти открытую сделку контакта в указанной воронке.
 
-        Логика:
-        - Ищем сделки через filter[query] по contact_id
-        - ПРОВЕРЯЕМ что сделка действительно привязана к контакту
-        - Берем ПЕРВУЮ открытую (status НЕ 142 и НЕ 143)
-        - Воронка и bot_name НЕ важны!
+        Логика по ТЗ (п. 6.2–6.3):
+        - Дубль только если сделка принадлежит контакту И в той же воронке И открытая
+        - Сделка в другой воронке — НЕ дубль
 
         Args:
             contact_id: ID контакта
+            pipeline_id: ID воронки для проверки (по умолчанию из settings)
 
         Returns:
-            Данные открытой сделки или None если нет открытых
+            Данные открытой сделки-дубля или None
         """
-        logger.info("Searching for any open lead for contact %s", contact_id)
+        pipeline_id = pipeline_id or settings.AMOCRM_PIPELINE_ID
+        logger.info(
+            "Searching for duplicate lead: contact=%s, pipeline=%s",
+            contact_id,
+            pipeline_id,
+        )
 
         try:
-            # Получаем сделки через filter[query] (правильный способ!)
             response = await self._make_request(
                 "GET",
                 "/leads",
                 params={
                     "filter[query]": str(contact_id),
-                    "with": "contacts",  # ВАЖНО! Получаем контакты вместе со сделкой
-                    "limit": 250,  # Увеличиваем лимит для надежности
+                    "with": "contacts",
+                    "limit": 250,
                 },
             )
 
@@ -465,44 +469,53 @@ class AmoCRMClient:
                 logger.info("No leads found for contact %s", contact_id)
                 return None
 
-            # Закрытые статусы
             closed_statuses = {settings.STATUS_SUCCESS, settings.STATUS_CLOSED}
 
-            # Ищем ЛЮБУЮ открытую сделку
             for lead in leads:
-                # ПРОВЕРКА 1: Сделка действительно привязана к нашему контакту
-                # (filter[query] ищет по разным полям, нужна проверка!)
+                # Проверяем что сделка принадлежит нашему контакту
                 contacts = lead.get("_embedded", {}).get("contacts", [])
                 contact_ids = [c["id"] for c in contacts]
 
                 if contact_id not in contact_ids:
                     logger.debug(
-                        "Lead %s is NOT linked to contact %s (linked to %s), skipping",
+                        "Lead %s is not linked to contact %s, skipping",
                         lead["id"],
                         contact_id,
-                        contact_ids,
                     )
-                    continue  # Пропускаем чужую сделку!
+                    continue
 
-                # ПРОВЕРКА 2: Сделка открытая (не закрыта)
+                # Проверяем воронку — дубль только в той же воронке
+                lead_pipeline_id = lead.get("pipeline_id")
+                if lead_pipeline_id != pipeline_id:
+                    logger.debug(
+                        "Lead %s is in different pipeline %s (need %s), skipping",
+                        lead["id"],
+                        lead_pipeline_id,
+                        pipeline_id,
+                    )
+                    continue
+
+                # Проверяем что сделка открытая
                 status_id = lead.get("status_id")
-
                 if status_id in closed_statuses:
                     logger.debug(
                         "Lead %s is closed (status=%s), skipping", lead["id"], status_id
                     )
                     continue
 
-                # Нашли открытую сделку контакта!
                 logger.info(
-                    "Open lead found: id=%s, pipeline=%s, status=%s",
+                    "Duplicate lead found: id=%s, pipeline=%s, status=%s",
                     lead["id"],
-                    lead.get("pipeline_id"),
+                    lead_pipeline_id,
                     status_id,
                 )
                 return lead
 
-            logger.info("No open leads found for contact %s", contact_id)
+            logger.info(
+                "No duplicate lead found for contact %s in pipeline %s",
+                contact_id,
+                pipeline_id,
+            )
             return None
 
         except Exception as e:
@@ -513,27 +526,17 @@ class AmoCRMClient:
         self,
         contact_id: int,
         bot_name: str,
-        course_direction: str | None = None,
         pipeline_id: int | None = None,
         status_id: int | None = None,
-        course: str | None = None,
-        where_studied: str | None = None,
-        student_class: str | None = None,
-        leave_reason: str | None = None,
     ) -> int:
         """
         Создать сделку в AmoCRM (без проверки дублей).
 
         Args:
             contact_id: ID контакта
-            bot_name: Название бота
-            course_direction: Направление курса (ЕГЭ/ОГЭ/средняя школа)
+            bot_name: Название бота (пишется в поле FIELD_BOT_NAME сделки)
             pipeline_id: ID воронки (по умолчанию из settings)
             status_id: ID этапа (по умолчанию из settings)
-            course: Курс
-            where_studied: Где учился (Предмет)
-            student_class: Класс
-            leave_reason: Причина ухода
 
         Returns:
             ID созданной сделки
@@ -552,27 +555,6 @@ class AmoCRMClient:
         custom_fields_values = [
             {"field_id": settings.FIELD_BOT_NAME, "values": [{"value": bot_name}]},
         ]
-
-        # Добавляем дополнительные поля если они есть
-        if course:
-            custom_fields_values.append(
-                {"field_id": settings.FIELD_LEAD_COURSE, "values": [{"value": course}]}
-            )
-        
-        if where_studied:
-            custom_fields_values.append(
-                {"field_id": settings.FIELD_LEAD_WHERE_STUDIED, "values": [{"value": where_studied}]}
-            )
-        
-        if student_class:
-            custom_fields_values.append(
-                {"field_id": settings.FIELD_LEAD_CLASS, "values": [{"value": student_class}]}
-            )
-        
-        if leave_reason:
-            custom_fields_values.append(
-                {"field_id": settings.FIELD_LEAD_LEAVE_REASON, "values": [{"value": leave_reason}]}
-            )
 
         lead_data: dict[str, Any] = {
             "name": f"{bot_name} - Новая заявка",

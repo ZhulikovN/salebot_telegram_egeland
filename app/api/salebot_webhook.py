@@ -9,21 +9,10 @@ from app.workers.queue import push_task
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# Список разрешенных ботов (все остальные будут игнорироваться)
-ALLOWED_BOTS = {
-    "Retention 25-26",
-    "ПГ 2к26 зеро игнор",
-    "ElAuthBot",
-    "Неоплаты Физика 2к26",
-    "Неоплаты Обществознание 5 месяц",
-    "Неоплаты Химия",
-    "Неоплаты Литература",
-    "Неоплаты Проф. мат (Маша)",
-    "Неоплаты Биология (Женя)",
-    "Неоплаты Проф. мат (Саша)",
-    "Неоплаты Биология (Геля)",
-    "Неоплаты Информатика 5 месяц",
-}
+# # Список разрешенных ботов (все остальные будут игнорироваться)
+# ALLOWED_BOTS = {
+#     "test_el_salebot",
+# }
 
 
 @router.post("/webhook/salebot")
@@ -57,15 +46,13 @@ async def salebot_webhook(webhook: SalebotWebhook, request: Request) -> dict[str
             )
             return {"status": "ignored", "reason": "service_event"}
 
-        # Игнорируем неразрешенных ботов (только ALLOWED_BOTS разрешены)
-        if webhook.bot_name not in ALLOWED_BOTS:
-            logger.info(
-                "Unknown bot ignored: platform_id=%s, bot=%s, message=%s",
-                webhook.platform_id,
-                webhook.bot_name,
-                webhook.message[:50] if len(webhook.message) > 50 else webhook.message,
-            )
-            return {"status": "ignored", "reason": "unknown_bot"}
+        # Нормализуем tg_username — убираем @ если есть
+        tg_username = webhook.tg_username
+        if tg_username and tg_username.startswith("@"):
+            tg_username = tg_username[1:]
+
+        # Имя клиента: если нет — используем tg_username
+        client_name = webhook.client.name or tg_username or str(webhook.platform_id)
 
         logger.info(
             "Salebot webhook: platform_id=%s, bot=%s, message=%s",
@@ -74,18 +61,15 @@ async def salebot_webhook(webhook: SalebotWebhook, request: Request) -> dict[str
             webhook.message[:50] if len(webhook.message) > 50 else webhook.message,
         )
 
-        # Добавляем задачу в очередь (быстро!)
-        logger.info("Pushing salebot task to queue: %s:%s", webhook.platform_id, webhook.bot_name)
-        
         await push_task(
             "salebot_message",
             {
                 "platform_id": webhook.platform_id,
                 "bot_name": webhook.bot_name,
                 "salebot_client_id": webhook.salebot_client_id,
-                "client_name": webhook.client.name,
+                "client_name": client_name,
                 "message_text": webhook.message,
-                "tg_username": webhook.tg_username,
+                "tg_username": tg_username,
             },
         )
 
@@ -94,5 +78,4 @@ async def salebot_webhook(webhook: SalebotWebhook, request: Request) -> dict[str
 
     except Exception as e:
         logger.error("Error queuing Salebot webhook: %s", e, exc_info=True)
-        # Возвращаем 200 даже при ошибке (чтобы Salebot не повторял запрос)
         return {"status": "error", "detail": str(e)}

@@ -112,8 +112,8 @@ async def process_salebot_message(data: dict) -> None:
         logger.error("Missing platform_id or bot_name in salebot message: %s", data)
         return
     
-    # Идентификатор диалога (используем ТОЛЬКО platform_id, bot_name игнорируется)
-    conversation_key = platform_id
+    # Идентификатор диалога: пара клиент+бот (каждый бот — отдельный диалог)
+    conversation_key = f"{platform_id}:{bot_name}"
     lock_key = f"lock:conversation:{conversation_key}"
     
     # Добавляем сообщение в очередь конкретного диалога
@@ -236,7 +236,7 @@ async def process_salebot_message(data: dict) -> None:
                     # Уменьшаем счётчик после успешной обработки
                     new_counter = await redis.decr(counter_key)
                     logger.debug(
-                        "✅ Salebot counter decremented: %s (now %d)",
+                        "Salebot counter decremented: %s (now %d)",
                         conversation_key,
                         new_counter,
                     )
@@ -506,7 +506,7 @@ async def main() -> None:
                 
                 # Алерт если очередь большая
                 if queue_size > 1000:
-                    logger.warning("⚠️  Queue backlog detected: %d tasks!", queue_size)
+                    logger.warning("Queue backlog detected: %d tasks!", queue_size)
                 elif queue_size > 500:
                     logger.info("Queue growing: %d tasks", queue_size)
             
