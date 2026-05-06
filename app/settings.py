@@ -1,0 +1,121 @@
+"""Настройки приложения."""
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from dotenv import load_dotenv
+
+load_dotenv()
+
+class Settings(BaseSettings):
+    """Настройки приложения из переменных окружения."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+        extra="ignore",
+    )
+
+    # amoCRM (long-lived token для большинства запросов)
+    AMOCRM_SUBDOMAIN: str = Field(
+        description="Поддомен amoCRM (например: egeland)"
+    )
+    AMO_ACCESS_TOKEN: str = Field(
+        description="Долгоживущий Bearer токен для API amoCRM"
+    )
+
+    # amoCRM OAuth2 (для специальных запросов)
+    AMO_CLIENT_ID: str = Field(description="Client ID для OAuth2 интеграции")
+    AMO_CLIENT_SECRET: str = Field(description="Client Secret для OAuth2 интеграции")
+    AMO_REDIRECT_URI: str = Field(description="Redirect URI для OAuth2")
+    AMO_AUTH_CODE: str = Field(
+        description="Authorization Code для получения токенов"
+    )
+    BASE_DOMAIN: str = Field(description="Базовый домен amoCRM")
+
+    # amojo (канал для чатов)
+    AMOJO_CHANNEL_ID: str = Field(description="ID канала amojo")
+    AMOJO_CHANNEL_SECRET: str = Field(
+        description="Secret для подписи amojo webhook"
+    )
+    AMOJO_SCOPE_ID: str = Field(
+        description="Scope ID канала (channel_id_account_id)"
+    )
+    AMOJO_ACCOUNT_ID: str = Field(description="Account ID в amoCRM")
+
+    # Salebot
+    SALEBOT_API_KEY: str = Field(description="API ключ для Salebot")
+    SALEBOT_PROJECT_ID: int = Field(description="ID проекта в Salebot (799515)")
+
+    # ID кастомных полей контакта в AmoCRM
+    FIELD_TG_ID: int = Field(
+        default=811310, description="ID поля Telegram user id (Radist.online)"
+    )
+    FIELD_TG_USERNAME: int = Field(
+        default=811308, description="ID поля Telegram username (Radist.online)"
+    )
+
+    # ID кастомных полей сделки в AmoCRM
+    FIELD_BOT_NAME: int = Field(
+        default=809165, description="ID поля 'Источник перехода' в сделке"
+    )
+
+    # Воронка и этап
+    AMOCRM_PIPELINE_ID: int = Field(
+        default=10195498, description="ID воронки"
+    )
+    AMOCRM_STATUS_ID: int = Field(
+        default=80731234,
+        description="ID этапа создания сделки",
+    )
+
+    # Статусы закрытых этапов (для проверки дублей)
+    STATUS_SUCCESS: int = Field(default=142, description="ID статуса 'Успешно'")
+    STATUS_CLOSED: int = Field(default=143, description="ID статуса 'Закрыто'")
+
+    # PostgreSQL
+    POSTGRES_HOST: str = Field(description="Хост PostgreSQL сервера")
+    POSTGRES_PORT: int = Field(default=5432, description="Порт PostgreSQL сервера")
+    POSTGRES_DB: str = Field(description="Имя базы данных")
+    POSTGRES_USER: str = Field(description="Пользователь PostgreSQL")
+    POSTGRES_PASSWORD: str = Field(description="Пароль PostgreSQL")
+
+    # Redis
+    REDIS_HOST: str = Field(description="Хост Redis сервера")
+    REDIS_PORT: int = Field(default=6379, description="Порт Redis сервера")
+    REDIS_PASSWORD: str = Field(description="Пароль для Redis")
+
+    # Rate Limiting
+    AMOCRM_MAX_REQUESTS_PER_SECOND: int = Field(
+        default=7,
+        description="Максимальное количество запросов к AmoCRM API в секунду",
+        ge=1,
+        le=10,
+    )
+
+    @property
+    def amocrm_api_url(self) -> str:
+        """Базовый URL для amoCRM API."""
+        return f"https://{self.AMOCRM_SUBDOMAIN}.amocrm.ru/api/v4"
+
+    @property
+    def amojo_api_url(self) -> str:
+        """Базовый URL для amojo API."""
+        return "https://amojo.amocrm.ru"
+
+    @property
+    def salebot_api_url(self) -> str:
+        """URL для API Salebot."""
+        return f"https://chatter.salebot.pro/api/{self.SALEBOT_API_KEY}"
+
+    @property
+    def redis_url(self) -> str:
+        """Сформировать URL подключения к Redis с паролем."""
+        return f"redis://:{self.REDIS_PASSWORD}@{self.REDIS_HOST}:{self.REDIS_PORT}"
+
+    @property
+    def postgres_url(self) -> str:
+        """Сформировать URL подключения к PostgreSQL."""
+        return f"postgresql+asyncpg://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+
+
+settings = Settings()
