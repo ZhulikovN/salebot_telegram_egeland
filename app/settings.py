@@ -17,7 +17,7 @@ class Settings(BaseSettings):
 
     # amoCRM (long-lived token для большинства запросов)
     AMOCRM_SUBDOMAIN: str = Field(
-        description="Поддомен amoCRM (например: zabotael)"
+        description="Поддомен amoCRM (например: egeland)"
     )
     AMO_ACCESS_TOKEN: str = Field(
         description="Долгоживущий Bearer токен для API amoCRM"
@@ -44,51 +44,28 @@ class Settings(BaseSettings):
 
     # Salebot
     SALEBOT_API_KEY: str = Field(description="API ключ для Salebot")
-    SALEBOT_PROJECT_ID: int = Field(description="ID проекта в Salebot")
+    SALEBOT_PROJECT_ID: int = Field(description="ID проекта в Salebot (799515)")
 
-    # ID кастомных полей AmoCRM
+    # ID кастомных полей контакта в AmoCRM
     FIELD_TG_ID: int = Field(
-        default=1362361, description="ID поля TG ID в AmoCRM"
+        default=811310, description="ID поля Telegram user id (Radist.online)"
     )
     FIELD_TG_USERNAME: int = Field(
-        default=1362363, description="ID поля tg_username в AmoCRM"
+        default=811308, description="ID поля Telegram username (Radist.online)"
     )
+
+    # ID кастомных полей сделки в AmoCRM
     FIELD_BOT_NAME: int = Field(
-        default=1362369, description="ID поля 'Название бота' в AmoCRM"
-    )
-    FIELD_TARIFF: int = Field(
-        default=1183221, description="ID поля 'Тариф' в AmoCRM"
-    )
-    
-    # Поля для сделки (leads)
-    FIELD_LEAD_COURSE: int = Field(
-        default=1183223, description="ID поля 'Курс' в сделке"
-    )
-    FIELD_LEAD_WHERE_STUDIED: int = Field(
-        default=947607, description="ID поля 'Где учился (Предмет)' в сделке"
-    )
-    FIELD_LEAD_CLASS: int = Field(
-        default=1188071, description="ID поля 'Класс' в сделке"
-    )
-    FIELD_LEAD_LEAVE_REASON: int = Field(
-        default=1183225, description="ID поля 'Причина ухода' в сделке"
+        default=809165, description="ID поля 'Источник перехода' в сделке"
     )
 
     # Воронка и этап
     AMOCRM_PIPELINE_ID: int = Field(
-        default=10379514, description="ID воронки (по умолчанию: Тест)"
+        default=10195498, description="ID воронки"
     )
     AMOCRM_STATUS_ID: int = Field(
-        default=82053406,
-        description="ID этапа (по умолчанию: Тест/Неразобранное)",
-    )
-    
-    # Воронка и этап для таблицы "айди игноры неоплат пг"
-    AMOCRM_PIPELINE_ID_PG_IGNORE_UNPAID: int = Field(
-        default=10657634, description="ID воронки для таблицы 'айди игноры неоплат пг'"
-    )
-    AMOCRM_STATUS_ID_PG_IGNORE_UNPAID: int = Field(
-        default=84014982, description="ID этапа 'бот' для таблицы 'айди игноры неоплат пг'"
+        default=80731234,
+        description="ID этапа создания сделки",
     )
 
     # Статусы закрытых этапов (для проверки дублей)
@@ -113,117 +90,6 @@ class Settings(BaseSettings):
         description="Максимальное количество запросов к AmoCRM API в секунду",
         ge=1,
         le=10,
-    )
-    
-    # Параллельная обработка таблиц
-    SHEETS_MAX_CONCURRENT_TASKS: int = Field(
-        default=7,
-        description="Максимальное количество параллельных задач при обработке таблиц",
-        ge=1,
-        le=20,
-    )
-    SHEETS_BATCH_SIZE: int = Field(
-        default=50,
-        description="Размер батча для обновления статусов в Google Sheets",
-        ge=10,
-        le=200,
-    )
-
-    # Google Sheets
-    GOOGLE_SERVICE_ACCOUNT_JSON: str = Field(
-        description="Путь к JSON файлу Service Account для Google Sheets"
-    )
-    
-    # Таблица: ПГ 2к26 зеро игнор
-    GOOGLE_PG_2K26_ZERO_IGNORE_SPREADSHEET_ID: str = Field(
-        description="ID таблицы ПГ 2к26 зеро игнор"
-    )
-    GOOGLE_PG_2K26_ZERO_IGNORE_WORKSHEET_NAME: str = Field(
-        description="Название листа в таблице ПГ 2к26 зеро игнор"
-    )
-    
-    # Таблица: Retention 25-26
-    GOOGLE_RETENTION_25_26_SPREADSHEET_ID: str = Field(
-        description="ID таблицы Retention 25-26"
-    )
-    GOOGLE_RETENTION_25_26_WORKSHEET_NAME: str = Field(
-        description="Название листа в таблице Retention 25-26"
-    )
-    GOOGLE_RETENTION_START_ROW: int = Field(
-        default=8285,
-        description="Номер строки начала обработки в таблице Retention (например: 8285)"
-    )
-    
-    # Таблицы Неоплаты (9 таблиц, обрабатываются раз в месяц)
-    GOOGLE_SPREADSHEET_ID_NEOPLATY_JAN_PHYSICS_2K26: str = Field(
-        description="ID таблицы Неоплаты Физика"
-    )
-    GOOGLE_WORKSHEET_NAME_NEOPLATY_JAN_PHYSICS_2K26: str = Field(
-        description="Название листа в таблице Неоплаты Физика"
-    )
-    
-    GOOGLE_SPREADSHEET_ID_NEOPLATY_5_MONTH_OBSH: str = Field(
-        description="ID таблицы Неоплаты Обществознание"
-    )
-    GOOGLE_WORKSHEET_NAME_NEOPLATY_5_MONTH_OBSH: str = Field(
-        description="Название листа в таблице Неоплаты Обществознание"
-    )
-    
-    GOOGLE_SPREADSHEET_ID_NEOPLATY_CHEM_JAN_4_TO_5: str = Field(
-        description="ID таблицы Неоплаты Химия"
-    )
-    GOOGLE_WORKSHEET_NAME_NEOPLATY_CHEM_JAN_4_TO_5: str = Field(
-        description="Название листа в таблице Неоплаты Химия"
-    )
-    
-    GOOGLE_SPREADSHEET_ID_NEOPLATY_LIT_JAN_2K26: str = Field(
-        description="ID таблицы Неоплаты Литература"
-    )
-    GOOGLE_WORKSHEET_NAME_NEOPLATY_LIT_JAN_2K26: str = Field(
-        description="Название листа в таблице Неоплаты Литература"
-    )
-    
-    GOOGLE_SPREADSHEET_ID_NEOPLATY_JAN_GENERAL: str = Field(
-        description="ID таблицы Неоплаты Проф. мат (Маша)"
-    )
-    GOOGLE_WORKSHEET_NAME_NEOPLATY_JAN_GENERAL: str = Field(
-        description="Название листа в таблице Неоплаты Проф. мат (Маша)"
-    )
-    
-    GOOGLE_SPREADSHEET_ID_NEOPLATY_JAN_BIO_ZHENYA_2K26: str = Field(
-        description="ID таблицы Неоплаты Биология (Женя)"
-    )
-    GOOGLE_WORKSHEET_NAME_NEOPLATY_JAN_BIO_ZHENYA_2K26: str = Field(
-        description="Название листа в таблице Неоплаты Биология (Женя)"
-    )
-    
-    GOOGLE_SPREADSHEET_ID_NEOPLATY_JAN_MATH_SASHA: str = Field(
-        description="ID таблицы Неоплаты Проф. мат (Саша)"
-    )
-    GOOGLE_WORKSHEET_NAME_NEOPLATY_JAN_MATH_SASHA: str = Field(
-        description="Название листа в таблице Неоплаты Проф. мат (Саша)"
-    )
-    
-    GOOGLE_SPREADSHEET_ID_NEOPLATY_JAN_BIO_GELYA_2K26: str = Field(
-        description="ID таблицы Неоплаты Биология (Геля)"
-    )
-    GOOGLE_WORKSHEET_NAME_NEOPLATY_JAN_BIO_GELYA_2K26: str = Field(
-        description="Название листа в таблице Неоплаты Биология (Геля)"
-    )
-    
-    GOOGLE_SPREADSHEET_ID_NEOPLATY_5_MONTH_INFO: str = Field(
-        description="ID таблицы Неоплаты Информатика"
-    )
-    GOOGLE_WORKSHEET_NAME_NEOPLATY_5_MONTH_INFO: str = Field(
-        description="Название листа в таблице Неоплаты Информатика"
-    )
-    
-    # Таблица: айди игноры неоплат пг
-    GOOGLE_SPREADSHEET_ID_PG_IGNORE_UNPAID: str = Field(
-        description="ID таблицы 'айди игноры неоплат пг'"
-    )
-    GOOGLE_WORKSHEET_NAME_PG_IGNORE_UNPAID: str = Field(
-        description="Название листа в таблице 'айди игноры неоплат пг'"
     )
 
     @property
