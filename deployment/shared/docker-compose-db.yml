@@ -1,0 +1,89 @@
+version: '3.8'
+
+# PostgreSQL и Redis для salebot-telegram интеграции
+# Этот файл НЕ меняется при деплое новых версий
+# БД работают постоянно, данные сохраняются в volumes
+#
+# ⚠️ ЗАЩИТА ОТ DDoS: Порты НЕ expose наружу!
+# Доступ только через внутреннюю Docker сеть (salebot-telegram-network)
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: salebot-telegram-postgres
+    # Expose порты ТОЛЬКО для localhost (для подключения systemd сервисов)
+    # НЕ доступен из интернета, только с VM!
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - salebot-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  salebot-redis:
+    image: redis:7-alpine
+    container_name: salebot-telegram-redis
+    # Expose порты ТОЛЬКО для localhost (для подключения systemd сервисов)
+    # НЕ доступен из интернета, только с VM!
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --requirepass ${REDIS_PASSWORD}
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --bind 0.0.0.0
+      --protected-mode yes
+      --rename-command FLUSHDB ""
+      --rename-command FLUSHALL ""
+      --rename-command CONFIG ""
+      --rename-command SHUTDOWN ""
+      --rename-command SLAVEOF ""
+      --rename-command REPLICAOF ""
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    restart: always
+    networks:
+      - salebot-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  salebot-network:
+    name: salebot-telegram-network
+    driver: bridge
