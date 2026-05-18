@@ -125,6 +125,7 @@ async def process_salebot_message(data: dict) -> None:
             "salebot_client_id": data.get("salebot_client_id"),
             "client_name": data.get("client_name"),
             "message_text": data.get("message_text"),
+            "attachments": data.get("attachments") or [],
             "tg_username": data.get("tg_username"),
         })
         
@@ -225,6 +226,7 @@ async def process_salebot_message(data: dict) -> None:
                         salebot_client_id=msg["salebot_client_id"],
                         client_name=msg["client_name"],
                         message_text=msg["message_text"],
+                        attachments=msg.get("attachments") or [],
                         tg_username=msg.get("tg_username"),
                     )
                     
@@ -392,6 +394,8 @@ async def process_amojo_message(data: dict) -> None:
                     await manager.handle_amojo_message(
                         conversation_id=msg["conversation_id"],
                         message_text=msg["message_text"],
+                        message_type=msg.get("message_type", "text"),
+                        media_url=msg.get("media_url"),
                     )
                     
                     logger.debug(

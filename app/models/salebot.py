@@ -42,7 +42,7 @@ class SalebotWebhook(BaseModel):
 
     id: int = Field(description="ID сообщения в Salebot")
     client: SalebotClient = Field(description="Данные клиента")
-    message: str = Field(description="Текст сообщения")
+    message: str | None = Field(default=None, description="Текст сообщения (null при медиа без подписи)")
     attachments: list | None = Field(default=None, description="Вложения (если есть)")
     project_id: int = Field(description="ID проекта в Salebot")
     is_input: int = Field(description="1 = от клиента, 0 = от бота")

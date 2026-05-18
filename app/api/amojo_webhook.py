@@ -50,7 +50,7 @@ async def amojo_webhook(
             scope_id,
             len(raw_body),
         )
-        # logger.info("AMOJO webhook RAW BODY: %s", raw_body.decode("utf-8")[:1000])
+        # logger.info("AMOJO webhook RAW BODY: %s", raw_body.decode("utf-8"))
 
         # 3. Парсим JSON
         try:
@@ -95,6 +95,8 @@ async def amojo_webhook(
             {
                 "conversation_id": webhook.message.conversation_id,
                 "message_text": webhook.message.message.text,
+                "message_type": webhook.message.message.type,
+                "media_url": webhook.message.message.media or None,
             },
         )
 

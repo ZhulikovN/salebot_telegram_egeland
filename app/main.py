@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api import amojo_webhook, health, salebot_webhook
+from app.api import amojo_webhook, health, media, salebot_webhook
 from app.db.storage import get_conversation_storage
 from app.utils.token_manager import TokenManager
 from app.workers.queue import close_queue
@@ -84,3 +84,4 @@ app = FastAPI(
 app.include_router(health.router, tags=["health"])
 app.include_router(salebot_webhook.router, tags=["webhooks"])
 app.include_router(amojo_webhook.router, tags=["webhooks"])
+app.include_router(media.router, tags=["media"])

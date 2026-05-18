@@ -1,98 +1,95 @@
 #!/usr/bin/env python3
 """
-Тест создания контакта и сделки с дополнительными полями
+Тест создания контакта и сделки с проверкой кастомных полей.
+
+Запуск:
+    cd ~/salebot_telegram_egeland/current
+    poetry run python tests/test_amocrm_client/test_contact_lead_with_fields.py
 """
 import asyncio
 import logging
+import sys
+import uuid
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from app.services.amocrm_client import AmoCRMClient
 from app.settings import settings
 
-# Настройка логирования
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
-async def main():
+
+async def main() -> None:
     print("=" * 80)
-    print("Тест создания контакта и сделки с дополнительными полями")
+    print("Тест создания контакта и сделки с полями (egeland)")
+    print(f"  FIELD_TG_ID      = {settings.FIELD_TG_ID}")
+    print(f"  FIELD_TG_USERNAME = {settings.FIELD_TG_USERNAME}")
+    print(f"  FIELD_BOT_NAME   = {settings.FIELD_BOT_NAME}")
+    print(f"  PIPELINE_ID      = {settings.AMOCRM_PIPELINE_ID}")
     print("=" * 80)
-    
-    # Инициализация клиента
+
     amocrm = AmoCRMClient()
-    
-    # Тестовые данные
-    test_tg_id = "777777777"
-    test_name = "Тестовый Ученик С Полями"
-    test_email = "test_fields@example.com"
-    test_phone = "+79001234567"
-    test_tg_username = "test_username"
-    
-    # Данные для сделки
-    test_course = "ПГ 2к26"
-    test_where_studied = "Английский язык"
-    test_class = "11 класс"
-    test_leave_reason = "Тестовая причина"
-    
+
+    tg_id = f"test_{uuid.uuid4().hex[:8]}"
+    tg_username = f"testuser_{uuid.uuid4().hex[:6]}"
+    bot_name = "ElAuthBot"
+    name = f"Тест {tg_id}"
+
     try:
-        # ШАГ 1: Создать контакт с полями
-        print(f"\n[ШАГ 1] Создание контакта...")
-        print(f"  Имя: {test_name}")
-        print(f"  ТГ ID: {test_tg_id}")
-        print(f"  TG Username: {test_tg_username}")
-        print(f"  Email: {test_email}")
-        print(f"  Phone: {test_phone}")
-        
+        # ШАГ 1: Создать контакт
+        print(f"\n[1] Создание контакта: name={name}, tg_id={tg_id}, username={tg_username}")
         contact_id = await amocrm.create_contact(
-            name=test_name,
-            tg_id=test_tg_id,
-            tg_username=test_tg_username,
-            email=test_email,
-            phone=test_phone,
+            name=name,
+            tg_id=tg_id,
+            tg_username=tg_username,
         )
-        print(f"  ✓ Contact created: {contact_id}")
-        
-        # ШАГ 2: Создать сделку с дополнительными полями
-        print(f"\n[ШАГ 2] Создание сделки...")
-        print(f"  Курс: {test_course}")
-        print(f"  Где учился (Предмет): {test_where_studied}")
-        print(f"  Класс: {test_class}")
-        print(f"  Причина ухода: {test_leave_reason}")
-        
+        print(f"    ✓ contact_id={contact_id}")
+
+        # ШАГ 2: Проверить поля контакта
+        print(f"\n[2] Проверка полей контакта...")
+        response = await amocrm._make_request("GET", f"/contacts/{contact_id}")
+        fields = amocrm._parse_custom_fields(response.get("custom_fields_values"))
+
+        tg_id_val = fields.get(settings.FIELD_TG_ID)
+        tg_username_val = fields.get(settings.FIELD_TG_USERNAME)
+
+        print(f"    FIELD_TG_ID ({settings.FIELD_TG_ID}): {tg_id_val!r}  → {'OK' if tg_id_val == tg_id else 'FAIL'}")
+        print(f"    FIELD_TG_USERNAME ({settings.FIELD_TG_USERNAME}): {tg_username_val!r}  → {'OK' if tg_username_val == tg_username else 'FAIL'}")
+
+        # ШАГ 3: Создать сделку
+        print(f"\n[3] Создание сделки: bot_name={bot_name}")
         lead_id = await amocrm.create_lead(
             contact_id=contact_id,
-            bot_name="ПГ 2к26 зеро игнор",
-            course=test_course,
-            where_studied=test_where_studied,
-            student_class=test_class,
-            leave_reason=test_leave_reason,
+            bot_name=bot_name,
         )
-        print(f"  ✓ Lead created: {lead_id}")
-        
-        # ШАГ 3: Вывод результатов
+        print(f"    ✓ lead_id={lead_id}")
+
+        # ШАГ 4: Проверить поля сделки
+        print(f"\n[4] Проверка полей сделки...")
+        lead_response = await amocrm._make_request("GET", f"/leads/{lead_id}")
+        lead_fields = amocrm._parse_custom_fields(lead_response.get("custom_fields_values"))
+
+        bot_name_val = lead_fields.get(settings.FIELD_BOT_NAME)
+        print(f"    FIELD_BOT_NAME ({settings.FIELD_BOT_NAME}): {bot_name_val!r}  → {'OK' if bot_name_val == bot_name else 'FAIL'}")
+
+        # Итог
+        all_ok = (tg_id_val == tg_id) and (tg_username_val == tg_username) and (bot_name_val == bot_name)
         print("\n" + "=" * 80)
-        print("✅ ГОТОВО!")
+        print("✅ ВСЕ ПОЛЯ ЗАПОЛНЕНЫ ВЕРНО" if all_ok else "❌ ЕСТЬ ПРОБЛЕМЫ С ПОЛЯМИ")
+        print(f"\nПроверить в AMO:")
+        print(f"  Контакт: https://egeland.amocrm.ru/contacts/detail/{contact_id}")
+        print(f"  Сделка:  https://egeland.amocrm.ru/leads/detail/{lead_id}")
         print("=" * 80)
-        print(f"\nПроверьте в amoCRM:")
-        print(f"  - Контакт: https://zabotael.amocrm.ru/contacts/detail/{contact_id}")
-        print(f"  - Сделка: https://zabotael.amocrm.ru/leads/detail/{lead_id}")
-        print(f"\nКонтакт должен содержать:")
-        print(f"  - TG ID: {test_tg_id}")
-        print(f"  - TG Username: {test_tg_username}")
-        print(f"  - Email: {test_email}")
-        print(f"  - Телефон: {test_phone}")
-        print(f"\nСделка должна содержать:")
-        print(f"  - Курс: {test_course}")
-        print(f"  - Где учился (Предмет): {test_where_studied}")
-        print(f"  - Класс: {test_class}")
-        print(f"  - Причина ухода: {test_leave_reason}")
-        print("=" * 80)
-        
+
     except Exception as e:
         print(f"\n❌ Ошибка: {e}")
         import traceback
         traceback.print_exc()
+    finally:
+        await amocrm.close()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
