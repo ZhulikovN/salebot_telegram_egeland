@@ -54,12 +54,15 @@ async def salebot_webhook(webhook: SalebotWebhook, request: Request) -> dict[str
         # Имя клиента: если нет — используем tg_username
         client_name = webhook.client.name or tg_username or str(webhook.platform_id)
 
+        msg_preview = (webhook.message or "")[:50]
         logger.info(
-            "Salebot webhook: platform_id=%s, bot=%s, message=%s",
+            "Salebot webhook: platform_id=%s, bot=%s, message=%r, attachments=%s",
             webhook.platform_id,
             webhook.bot_name,
-            webhook.message[:50] if len(webhook.message) > 50 else webhook.message,
+            msg_preview,
+            webhook.attachments,
         )
+        # logger.info("Salebot webhook FULL PAYLOAD: %s", webhook.model_dump())
 
         await push_task(
             "salebot_message",
@@ -69,6 +72,7 @@ async def salebot_webhook(webhook: SalebotWebhook, request: Request) -> dict[str
                 "salebot_client_id": webhook.salebot_client_id,
                 "client_name": client_name,
                 "message_text": webhook.message,
+                "attachments": webhook.attachments or [],
                 "tg_username": tg_username,
             },
         )

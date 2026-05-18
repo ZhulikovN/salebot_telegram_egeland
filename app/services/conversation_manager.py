@@ -39,7 +39,8 @@ class ConversationManager:
         bot_name: str,
         salebot_client_id: int,
         client_name: str,
-        message_text: str,
+        message_text: str | None,
+        attachments: list | None = None,
         tg_username: str | None = None,
     ) -> str | None:
         """
@@ -100,17 +101,39 @@ class ConversationManager:
         )
 
         is_first_message = conversation.messages_count == 0
+        attachments = attachments or []
 
-        await self.amojo.send_incoming_message(
-            conversation_id=conversation.conversation_id,
-            msgid=f"salebot:{uuid4().hex}",
-            sender_id=f"tg:{platform_id}",
-            sender_name=client_name,
-            text=message_text,
-            silent=not is_first_message,
-        )
+        if message_text:
+            await self.amojo.send_incoming_message(
+                conversation_id=conversation.conversation_id,
+                msgid=f"salebot:{uuid4().hex}",
+                sender_id=f"tg:{platform_id}",
+                sender_name=client_name,
+                text=message_text,
+                silent=not is_first_message,
+            )
+            await self.storage.increment_message_count(conversation.conversation_id)
+            is_first_message = False
 
-        await self.storage.increment_message_count(conversation.conversation_id)
+        for media_url in attachments:
+            await self.amojo.send_incoming_message(
+                conversation_id=conversation.conversation_id,
+                msgid=f"salebot:{uuid4().hex}",
+                sender_id=f"tg:{platform_id}",
+                sender_name=client_name,
+                text="",
+                silent=not is_first_message,
+                media_url=media_url,
+            )
+            await self.storage.increment_message_count(conversation.conversation_id)
+            is_first_message = False
+
+        if not message_text and not attachments:
+            logger.warning(
+                "Empty message (no text, no attachments): platform_id=%s, conversation=%s",
+                platform_id,
+                conversation.conversation_id,
+            )
 
         return conversation.conversation_id
 
@@ -272,7 +295,9 @@ class ConversationManager:
     async def handle_amojo_message(
         self,
         conversation_id: str,
-        message_text: str,
+        message_text: str | None,
+        message_type: str = "text",
+        media_url: str | None = None,
     ) -> None:
         """
         Обработать ответ менеджера из amoCRM.
@@ -280,6 +305,8 @@ class ConversationManager:
         Args:
             conversation_id: UUID чата
             message_text: Текст сообщения от менеджера
+            message_type: Тип сообщения (text/picture/voice/video/file)
+            media_url: URL медиафайла (для не-текстовых сообщений)
 
         Raises:
             ValueError: Если диалог не найден
@@ -288,12 +315,38 @@ class ConversationManager:
         if not conversation:
             raise ValueError(f"Conversation not found: {conversation_id}")
 
+        # Маппинг типов amojo → Salebot attachment_type
+        amojo_to_salebot_type: dict[str, str] = {
+            "picture": "image",
+            "voice": "audio",
+            "video": "video",
+            "file": "file",
+        }
+        salebot_attachment_type = amojo_to_salebot_type.get(message_type)
+
+        # Проксируем медиафайл через наш сервер (drive-b.amocrm.ru требует авторизацию)
+        public_media_url: str | None = None
+        if media_url and salebot_attachment_type:
+            from app.services.media_proxy import download_and_proxy
+            public_media_url = await download_and_proxy(media_url)
+            if not public_media_url:
+                logger.error(
+                    "Failed to proxy media, sending text only: url=%s",
+                    media_url,
+                )
+
         await self.salebot.send_message(
             client_id=conversation.salebot_client_id,
-            message=message_text,
+            message=message_text or "",
+            attachment_url=public_media_url,
+            attachment_type=salebot_attachment_type if public_media_url else None,
         )
-        logger.info("Message sent to Salebot: client_id=%s", conversation.salebot_client_id)
 
+        logger.info(
+            "Message sent to Salebot: client_id=%s, type=%s",
+            conversation.salebot_client_id,
+            message_type,
+        )
         await self.storage.increment_message_count(conversation_id)
 
     async def close(self) -> None:

@@ -1,0 +1,19 @@
+[Unit]
+Description=Salebot ↔ amoCRM Integration API (egeland)
+After=network.target
+
+[Service]
+User=ubuntu
+Group=ubuntu
+
+EnvironmentFile=/home/ubuntu/salebot_telegram_egeland/current/.env
+
+WorkingDirectory=/home/ubuntu/salebot_telegram_egeland/current
+
+ExecStart=/home/ubuntu/.cache/pypoetry/virtualenvs/salebot-telegram-egeland-efy7SSHF-py3.12/bin/uvicorn app.main:app --host 127.0.0.1 --port 8024 --workers 2
+
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -84,6 +84,11 @@ class Settings(BaseSettings):
     REDIS_PORT: int = Field(default=6379, description="Порт Redis сервера")
     REDIS_PASSWORD: str = Field(description="Пароль для Redis")
 
+    # Публичный URL нашего сервера (для проксирования медиафайлов AMO → Salebot)
+    PUBLIC_URL: str = Field(
+        description="Публичный URL сервера (например: https://example.com) без слеша в конце"
+    )
+
     # Rate Limiting
     AMOCRM_MAX_REQUESTS_PER_SECOND: int = Field(
         default=7,

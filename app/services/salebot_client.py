@@ -17,7 +17,13 @@ class SalebotClient:
         self.base_url = settings.salebot_api_url
         self.project_id = settings.SALEBOT_PROJECT_ID
 
-    async def send_message(self, client_id: int, message: str) -> dict[str, Any]:
+    async def send_message(
+        self,
+        client_id: int,
+        message: str,
+        attachment_url: str | None = None,
+        attachment_type: str | None = None,
+    ) -> dict[str, Any]:
         """
         Отправить сообщение клиенту через Salebot API.
 
@@ -25,14 +31,18 @@ class SalebotClient:
 
         Body:
         {
-            "client_id": "836058546",        # salebot_client_id из БД (client.id)
+            "client_id": "836058546",
             "project_id": 424757,
-            "message": "Текст сообщения"
+            "message": "Текст сообщения",
+            "attachment_url": "https://...",   # опционально
+            "attachment_type": "image/audio/video/file"  # обязателен если передан attachment_url
         }
 
         Args:
             client_id: salebot_client_id из БД (это client.id из webhook, НЕ platform_id!)
-            message: текст сообщения для отправки
+            message: текст сообщения (необязателен если передан attachment_url)
+            attachment_url: URL медиафайла (опционально)
+            attachment_type: тип вложения — image, audio, video, file (обязателен если передан attachment_url)
 
         Returns:
             Ответ от Salebot API
@@ -40,15 +50,27 @@ class SalebotClient:
         Raises:
             aiohttp.ClientError: При ошибке запроса
         """
-        logger.info("Sending message to Salebot: client_id=%s", client_id)
+        if attachment_url:
+            logger.info(
+                "Sending media to Salebot: client_id=%s, type=%s, url=%s",
+                client_id,
+                attachment_type,
+                attachment_url,
+            )
+        else:
+            logger.info("Sending message to Salebot: client_id=%s", client_id)
 
         url = f"{self.base_url}/message"
 
-        payload = {
-            "client_id": str(client_id),  # Salebot ожидает строку
+        payload: dict[str, Any] = {
+            "client_id": str(client_id),
             "project_id": self.project_id,
             "message": message,
         }
+
+        if attachment_url and attachment_type:
+            payload["attachment_url"] = attachment_url
+            payload["attachment_type"] = attachment_type
 
         try:
             async with aiohttp.ClientSession() as session:

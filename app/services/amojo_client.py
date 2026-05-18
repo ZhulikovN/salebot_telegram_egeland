@@ -13,6 +13,25 @@ from app.settings import settings
 
 logger = logging.getLogger(__name__)
 
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
+VOICE_EXTENSIONS = {".oga", ".ogg", ".mp3", ".m4a", ".wav", ".aac"}
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+
+
+def _get_amojo_media_type(url: str) -> str:
+    """Определить тип медиа для amojo по расширению URL."""
+    lower = url.lower().split("?")[0]
+    for ext in IMAGE_EXTENSIONS:
+        if lower.endswith(ext):
+            return "picture"
+    for ext in VOICE_EXTENSIONS:
+        if lower.endswith(ext):
+            return "voice"
+    for ext in VIDEO_EXTENSIONS:
+        if lower.endswith(ext):
+            return "video"
+    return "file"
+
 
 class AmojoClient:
     """Клиент для отправки сообщений в amojo (чаты AmoCRM)."""
@@ -81,32 +100,56 @@ class AmojoClient:
         text: str,
         silent: bool = True,
         profile_link: str | None = None,
+        media_url: str | None = None,
     ) -> dict[str, Any]:
         """
         Отправить входящее сообщение от клиента в amojo.
 
         Args:
-            conversation_id: ID диалога (salebot:{project_id}:{platform_id})
-            msgid: Уникальный ID сообщения (salebot:{project_id}:{message_id})
+            conversation_id: ID диалога
+            msgid: Уникальный ID сообщения
             sender_id: ID отправителя (tg:{platform_id})
             sender_name: Имя отправителя
             text: Текст сообщения
             silent: Не создавать Неразобранное (True = не создавать)
             profile_link: Ссылка на профиль (https://t.me/username)
+            media_url: URL медиафайла (картинка/голосовое/видео)
 
         Returns:
             Ответ от amojo API
         """
-        logger.info(
-            "Sending message to amojo: conversation=%s, sender=%s, silent=%s",
-            conversation_id,
-            sender_id,
-            silent,
-        )
+        if media_url:
+            media_type = _get_amojo_media_type(media_url)
+            logger.info(
+                "Sending media to amojo: conversation=%s, type=%s, url=%s",
+                conversation_id,
+                media_type,
+                media_url,
+            )
+        else:
+            media_type = None
+            logger.info(
+                "Sending message to amojo: conversation=%s, sender=%s, silent=%s",
+                conversation_id,
+                sender_id,
+                silent,
+            )
 
         now = datetime.now(timezone.utc)
         timestamp = int(now.timestamp())
         msec_timestamp = int(now.timestamp() * 1000)
+
+        if media_url and media_type:
+            message_block: dict[str, Any] = {
+                "type": media_type,
+                "text": text,
+                "media": media_url,
+            }
+        else:
+            message_block = {
+                "type": "text",
+                "text": text,
+            }
 
         # Формируем payload
         payload: dict[str, Any] = {
@@ -121,10 +164,7 @@ class AmojoClient:
                     "id": sender_id,
                     "name": sender_name,
                 },
-                "message": {
-                    "type": "text",
-                    "text": text,
-                },
+                "message": message_block,
             },
         }
 
