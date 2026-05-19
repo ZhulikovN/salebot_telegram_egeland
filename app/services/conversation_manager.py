@@ -194,6 +194,9 @@ class ConversationManager:
                     bot_config.pipeline_id,
                     lead_id,
                 )
+                # First-touch для дубля: заполняем только пустые UTM поля сделки
+                if utm_data:
+                    await self._update_lead_utm_first_touch(lead_id, utm_data)
             else:
                 lead_id = await self.amocrm.create_lead(
                     contact_id=contact_id,
@@ -201,6 +204,7 @@ class ConversationManager:
                     pipeline_id=bot_config.pipeline_id,
                     status_id=bot_config.status_id,
                     lead_name=bot_config.lead_name or None,
+                    utm_data=utm_data,
                 )
                 logger.info("New lead created: lead_id=%s", lead_id)
 
@@ -263,13 +267,14 @@ class ConversationManager:
         Найти существующий контакт или создать новый.
 
         Поиск по TG ID → поиск по username → создание.
-        При нахождении: дополняет только пустые поля (first-touch, старые данные приоритетнее).
+        При нахождении: дополняет только пустые tg-поля (старые данные приоритетнее).
+        UTM хранятся в сделке, не в контакте.
 
         Args:
             platform_id: Telegram ID
             client_name: Имя клиента
             tg_username: Telegram username (без @)
-            utm_data: UTM-метки (первое касание — не перезаписываются)
+            utm_data: не используется здесь (UTM пишутся в сделку)
 
         Returns:
             ID контакта в AMO
@@ -285,7 +290,7 @@ class ConversationManager:
             contact_id = contact["id"]
             logger.info("Found existing contact: %s", contact_id)
 
-            # Дополняем только пустые поля (first-touch: старые данные приоритетнее)
+            # Дополняем только пустые TG-поля (старые данные приоритетнее)
             existing_fields = self.amocrm._parse_custom_fields(
                 contact.get("custom_fields_values")
             )
@@ -298,33 +303,59 @@ class ConversationManager:
             if tg_username and not existing_fields.get(settings.FIELD_TG_USERNAME):
                 fields_to_update[settings.FIELD_TG_USERNAME] = tg_username
 
-            # UTM: записываем только если поле пустое (first-touch)
-            if utm_data:
-                utm_field_map = {
-                    settings.FIELD_UTM_SOURCE: utm_data.get("utm_source"),
-                    settings.FIELD_UTM_MEDIUM: utm_data.get("utm_medium"),
-                    settings.FIELD_UTM_CAMPAIGN: utm_data.get("utm_campaign"),
-                    settings.FIELD_UTM_TERM: utm_data.get("utm_term"),
-                    settings.FIELD_UTM_CONTENT: utm_data.get("utm_content"),
-                }
-                for field_id, value in utm_field_map.items():
-                    if value and not existing_fields.get(field_id):
-                        fields_to_update[field_id] = value
-
             if fields_to_update:
                 await self.amocrm.update_contact(contact_id, fields_to_update)
 
             return contact_id
 
-        # Создаём новый контакт (UTM передаём при создании)
+        # Создаём новый контакт
         contact_id = await self.amocrm.create_contact(
             name=client_name,
             tg_id=platform_id,
             tg_username=tg_username,
-            utm_data=utm_data,
         )
         logger.info("New contact created: %s", contact_id)
         return contact_id
+
+    async def _update_lead_utm_first_touch(self, lead_id: int, utm_data: dict) -> None:
+        """
+        Заполнить UTM поля существующей сделки — только пустые (first-touch).
+
+        Args:
+            lead_id: ID сделки
+            utm_data: UTM-метки из Salebot
+        """
+        try:
+            lead_response = await self.amocrm._make_request("GET", f"/leads/{lead_id}")
+            existing = self.amocrm._parse_custom_fields(
+                lead_response.get("custom_fields_values")
+            )
+
+            utm_field_map = {
+                settings.FIELD_UTM_SOURCE:   utm_data.get("utm_source"),
+                settings.FIELD_UTM_MEDIUM:   utm_data.get("utm_medium"),
+                settings.FIELD_UTM_CAMPAIGN: utm_data.get("utm_campaign"),
+                settings.FIELD_UTM_TERM:     utm_data.get("utm_term"),
+                settings.FIELD_UTM_CONTENT:  utm_data.get("utm_content"),
+            }
+
+            fields_to_update = {
+                field_id: value
+                for field_id, value in utm_field_map.items()
+                if value and not existing.get(field_id)
+            }
+
+            if fields_to_update:
+                await self.amocrm.update_lead(lead_id, fields_to_update)
+                logger.info(
+                    "UTM first-touch updated for duplicate lead %s: %s",
+                    lead_id,
+                    fields_to_update,
+                )
+            else:
+                logger.debug("UTM fields already filled for lead %s, skipping", lead_id)
+        except Exception as e:
+            logger.warning("Failed to update UTM for lead %s: %s", lead_id, e)
 
     async def handle_amojo_message(
         self,
