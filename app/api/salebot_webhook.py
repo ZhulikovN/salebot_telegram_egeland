@@ -74,6 +74,7 @@ async def salebot_webhook(webhook: SalebotWebhook, request: Request) -> dict[str
                 "message_text": webhook.message,
                 "attachments": webhook.attachments or [],
                 "tg_username": tg_username,
+                "utm_data": webhook.utm_data,
             },
         )
 

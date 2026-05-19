@@ -76,3 +76,15 @@ class SalebotWebhook(BaseModel):
         """Получить Telegram username из variables."""
         return self.client.variables.get("tg_username")
 
+    @property
+    def utm_data(self) -> dict[str, str | None]:
+        """Получить UTM-метки из variables клиента."""
+        v = self.client.variables
+        return {
+            "utm_source": v.get("utm_source"),
+            "utm_medium": v.get("utm_medium"),
+            "utm_campaign": v.get("utm_campaign"),
+            "utm_term": v.get("utm_term"),
+            "utm_content": v.get("utm_content"),
+        }
+

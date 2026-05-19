@@ -54,6 +54,13 @@ class Settings(BaseSettings):
         default=811308, description="ID поля Telegram username (Radist.online)"
     )
 
+    # UTM-метки контакта (первое касание)
+    FIELD_UTM_SOURCE: int = Field(default=688736, description="ID поля utm_source контакта")
+    FIELD_UTM_MEDIUM: int = Field(default=688744, description="ID поля utm_medium контакта")
+    FIELD_UTM_CAMPAIGN: int = Field(default=688742, description="ID поля utm_campaign контакта")
+    FIELD_UTM_TERM: int = Field(default=688740, description="ID поля utm_term контакта")
+    FIELD_UTM_CONTENT: int = Field(default=712229, description="ID поля utm_content контакта")
+
     # ID кастомных полей сделки в AmoCRM
     FIELD_BOT_NAME: int = Field(
         default=809165, description="ID поля 'Источник перехода' в сделке"

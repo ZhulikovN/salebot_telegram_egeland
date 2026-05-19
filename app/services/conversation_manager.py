@@ -42,6 +42,7 @@ class ConversationManager:
         message_text: str | None,
         attachments: list | None = None,
         tg_username: str | None = None,
+        utm_data: dict | None = None,
     ) -> str | None:
         """
         Обработать входящее сообщение от Salebot.
@@ -77,6 +78,7 @@ class ConversationManager:
                     salebot_client_id=salebot_client_id,
                     client_name=client_name,
                     tg_username=tg_username,
+                    utm_data=utm_data,
                 )
             except Exception as e:
                 if "duplicate key value" in str(e) or "unique constraint" in str(e).lower():
@@ -144,6 +146,7 @@ class ConversationManager:
         salebot_client_id: int,
         client_name: str,
         tg_username: str | None,
+        utm_data: dict | None = None,
     ):
         """
         Создать новый диалог: контакт → сделка → чат amojo → запись в БД.
@@ -164,6 +167,7 @@ class ConversationManager:
                 platform_id=platform_id,
                 client_name=client_name,
                 tg_username=tg_username,
+                utm_data=utm_data,
             )
 
             # 2. Проверить дубль сделки в текущей воронке
@@ -239,17 +243,19 @@ class ConversationManager:
         platform_id: str,
         client_name: str,
         tg_username: str | None,
+        utm_data: dict | None = None,
     ) -> int:
         """
         Найти существующий контакт или создать новый.
 
         Поиск по TG ID → поиск по username → создание.
-        При нахождении: дополняет пустые поля (старые данные приоритетнее).
+        При нахождении: дополняет только пустые поля (first-touch, старые данные приоритетнее).
 
         Args:
             platform_id: Telegram ID
             client_name: Имя клиента
             tg_username: Telegram username (без @)
+            utm_data: UTM-метки (первое касание — не перезаписываются)
 
         Returns:
             ID контакта в AMO
@@ -265,7 +271,7 @@ class ConversationManager:
             contact_id = contact["id"]
             logger.info("Found existing contact: %s", contact_id)
 
-            # Дополняем только пустые поля (старые данные приоритетнее новых)
+            # Дополняем только пустые поля (first-touch: старые данные приоритетнее)
             existing_fields = self.amocrm._parse_custom_fields(
                 contact.get("custom_fields_values")
             )
@@ -278,16 +284,30 @@ class ConversationManager:
             if tg_username and not existing_fields.get(settings.FIELD_TG_USERNAME):
                 fields_to_update[settings.FIELD_TG_USERNAME] = tg_username
 
+            # UTM: записываем только если поле пустое (first-touch)
+            if utm_data:
+                utm_field_map = {
+                    settings.FIELD_UTM_SOURCE: utm_data.get("utm_source"),
+                    settings.FIELD_UTM_MEDIUM: utm_data.get("utm_medium"),
+                    settings.FIELD_UTM_CAMPAIGN: utm_data.get("utm_campaign"),
+                    settings.FIELD_UTM_TERM: utm_data.get("utm_term"),
+                    settings.FIELD_UTM_CONTENT: utm_data.get("utm_content"),
+                }
+                for field_id, value in utm_field_map.items():
+                    if value and not existing_fields.get(field_id):
+                        fields_to_update[field_id] = value
+
             if fields_to_update:
                 await self.amocrm.update_contact(contact_id, fields_to_update)
 
             return contact_id
 
-        # Создаём новый контакт
+        # Создаём новый контакт (UTM передаём при создании)
         contact_id = await self.amocrm.create_contact(
             name=client_name,
             tg_id=platform_id,
             tg_username=tg_username,
+            utm_data=utm_data,
         )
         logger.info("New contact created: %s", contact_id)
         return contact_id
