@@ -127,6 +127,7 @@ async def process_salebot_message(data: dict) -> None:
             "message_text": data.get("message_text"),
             "attachments": data.get("attachments") or [],
             "tg_username": data.get("tg_username"),
+            "utm_data": data.get("utm_data"),
         })
         
         # Увеличиваем счётчик необработанных сообщений
@@ -228,6 +229,7 @@ async def process_salebot_message(data: dict) -> None:
                         message_text=msg["message_text"],
                         attachments=msg.get("attachments") or [],
                         tg_username=msg.get("tg_username"),
+                        utm_data=msg.get("utm_data"),
                     )
                     
                     logger.debug(

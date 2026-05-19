@@ -299,6 +299,7 @@ class AmoCRMClient:
         tg_username: str | None = None,
         email: str | None = None,
         phone: str | None = None,
+        utm_data: dict | None = None,
     ) -> int:
         """
         Создать новый контакт в AmoCRM.
@@ -309,12 +310,13 @@ class AmoCRMClient:
             tg_username: Telegram username (без @)
             email: Email контакта
             phone: Телефон контакта
+            utm_data: UTM-метки первого касания (utm_source, utm_medium, utm_campaign, utm_term, utm_content)
 
         Returns:
             ID созданного контакта
         """
-        logger.info("Creating contact: name=%s, tg_id=%s, username=%s, email=%s, phone=%s", 
-                   name, tg_id, tg_username, email, phone)
+        logger.info("Creating contact: name=%s, tg_id=%s, username=%s, email=%s, phone=%s",
+                    name, tg_id, tg_username, email, phone)
 
         contact_data: dict[str, Any] = {
             "name": name,
@@ -327,16 +329,32 @@ class AmoCRMClient:
             contact_data["custom_fields_values"].append(
                 {"field_id": settings.FIELD_TG_USERNAME, "values": [{"value": tg_username}]}
             )
-        
+
         if email:
             contact_data["custom_fields_values"].append(
                 {"field_code": "EMAIL", "values": [{"value": email, "enum_code": "WORK"}]}
             )
-        
+
         if phone:
             contact_data["custom_fields_values"].append(
                 {"field_code": "PHONE", "values": [{"value": phone, "enum_code": "WORK"}]}
             )
+
+        # UTM-метки первого касания
+        if utm_data:
+            utm_field_map = {
+                settings.FIELD_UTM_SOURCE: utm_data.get("utm_source"),
+                settings.FIELD_UTM_MEDIUM: utm_data.get("utm_medium"),
+                settings.FIELD_UTM_CAMPAIGN: utm_data.get("utm_campaign"),
+                settings.FIELD_UTM_TERM: utm_data.get("utm_term"),
+                settings.FIELD_UTM_CONTENT: utm_data.get("utm_content"),
+            }
+            for field_id, value in utm_field_map.items():
+                if value:
+                    contact_data["custom_fields_values"].append(
+                        {"field_id": field_id, "values": [{"value": value}]}
+                    )
+            logger.info("Adding UTM data to new contact: %s", utm_data)
 
         try:
             response = await self._make_request("POST", "/contacts", data=[contact_data])
@@ -528,6 +546,7 @@ class AmoCRMClient:
         bot_name: str,
         pipeline_id: int | None = None,
         status_id: int | None = None,
+        lead_name: str | None = None,
     ) -> int:
         """
         Создать сделку в AmoCRM (без проверки дублей).
@@ -537,19 +556,22 @@ class AmoCRMClient:
             bot_name: Название бота (пишется в поле FIELD_BOT_NAME сделки)
             pipeline_id: ID воронки (по умолчанию из settings)
             status_id: ID этапа (по умолчанию из settings)
+            lead_name: Название сделки (если не передано — формируется из bot_name)
 
         Returns:
             ID созданной сделки
         """
         pipeline_id = pipeline_id or settings.AMOCRM_PIPELINE_ID
         status_id = status_id or settings.AMOCRM_STATUS_ID
+        name = lead_name or f"{bot_name} - Новая заявка"
 
         logger.info(
-            "Creating lead: contact=%s, bot=%s, pipeline=%s, status=%s",
+            "Creating lead: contact=%s, bot=%s, pipeline=%s, status=%s, name=%r",
             contact_id,
             bot_name,
             pipeline_id,
             status_id,
+            name,
         )
 
         custom_fields_values = [
@@ -557,7 +579,7 @@ class AmoCRMClient:
         ]
 
         lead_data: dict[str, Any] = {
-            "name": f"{bot_name} - Новая заявка",
+            "name": name,
             "pipeline_id": pipeline_id,
             "status_id": status_id,
             "_embedded": {
