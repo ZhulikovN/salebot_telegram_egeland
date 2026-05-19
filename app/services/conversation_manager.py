@@ -2,6 +2,7 @@
 import logging
 from uuid import uuid4
 
+from app.config.bot_routing import get_bot_config
 from app.db.storage import get_conversation_storage
 from app.services.amocrm_client import AmoCRMClient
 from app.services.amojo_client import AmojoClient
@@ -162,6 +163,16 @@ class ConversationManager:
             Созданная запись Conversation или None при ошибке
         """
         try:
+            # Определяем конфигурацию воронки/этапа/названия по боту
+            bot_config = get_bot_config(bot_name)
+            logger.info(
+                "Bot config for %r: pipeline=%s, status=%s, lead_name=%r",
+                bot_name,
+                bot_config.pipeline_id,
+                bot_config.status_id,
+                bot_config.lead_name or "(default)",
+            )
+
             # 1. Найти или создать контакт
             contact_id = await self._find_or_create_contact(
                 platform_id=platform_id,
@@ -170,23 +181,26 @@ class ConversationManager:
                 utm_data=utm_data,
             )
 
-            # 2. Проверить дубль сделки в текущей воронке
+            # 2. Проверить дубль сделки в нужной воронке (зависит от бота)
             duplicate_lead = await self.amocrm.check_duplicate_lead(
                 contact_id=contact_id,
-                pipeline_id=settings.AMOCRM_PIPELINE_ID,
+                pipeline_id=bot_config.pipeline_id,
             )
 
             if duplicate_lead:
                 lead_id = duplicate_lead["id"]
                 logger.info(
                     "Duplicate lead found in pipeline %s: lead_id=%s",
-                    settings.AMOCRM_PIPELINE_ID,
+                    bot_config.pipeline_id,
                     lead_id,
                 )
             else:
                 lead_id = await self.amocrm.create_lead(
                     contact_id=contact_id,
                     bot_name=bot_name,
+                    pipeline_id=bot_config.pipeline_id,
+                    status_id=bot_config.status_id,
+                    lead_name=bot_config.lead_name or None,
                 )
                 logger.info("New lead created: lead_id=%s", lead_id)
 

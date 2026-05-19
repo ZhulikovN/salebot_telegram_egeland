@@ -66,13 +66,21 @@ class Settings(BaseSettings):
         default=809165, description="ID поля 'Источник перехода' в сделке"
     )
 
-    # Воронка и этап
+    # Воронка и этап — основные (test_el_salebot и все боты без явного конфига)
     AMOCRM_PIPELINE_ID: int = Field(
-        default=10195498, description="ID воронки"
+        default=10195498, description="ID воронки (Анкета удержания)"
     )
     AMOCRM_STATUS_ID: int = Field(
         default=80731234,
-        description="ID этапа создания сделки",
+        description="ID этапа создания сделки (из бота)",
+    )
+
+    # Воронка и этап — для новых лид-ботов (el_connetbot, el_eduwith_bot, el_edu_with_bot, el_edu_withbot)
+    AMOCRM_PIPELINE_ID_LEADS: int = Field(
+        default=8598230, description="ID воронки для лид-ботов"
+    )
+    AMOCRM_STATUS_ID_LEADS: int = Field(
+        default=83375282, description="ID этапа создания сделки для лид-ботов"
     )
 
     # Статусы закрытых этапов (для проверки дублей)

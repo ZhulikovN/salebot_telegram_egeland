@@ -546,6 +546,7 @@ class AmoCRMClient:
         bot_name: str,
         pipeline_id: int | None = None,
         status_id: int | None = None,
+        lead_name: str | None = None,
     ) -> int:
         """
         Создать сделку в AmoCRM (без проверки дублей).
@@ -555,19 +556,22 @@ class AmoCRMClient:
             bot_name: Название бота (пишется в поле FIELD_BOT_NAME сделки)
             pipeline_id: ID воронки (по умолчанию из settings)
             status_id: ID этапа (по умолчанию из settings)
+            lead_name: Название сделки (если не передано — формируется из bot_name)
 
         Returns:
             ID созданной сделки
         """
         pipeline_id = pipeline_id or settings.AMOCRM_PIPELINE_ID
         status_id = status_id or settings.AMOCRM_STATUS_ID
+        name = lead_name or f"{bot_name} - Новая заявка"
 
         logger.info(
-            "Creating lead: contact=%s, bot=%s, pipeline=%s, status=%s",
+            "Creating lead: contact=%s, bot=%s, pipeline=%s, status=%s, name=%r",
             contact_id,
             bot_name,
             pipeline_id,
             status_id,
+            name,
         )
 
         custom_fields_values = [
@@ -575,7 +579,7 @@ class AmoCRMClient:
         ]
 
         lead_data: dict[str, Any] = {
-            "name": f"{bot_name} - Новая заявка",
+            "name": name,
             "pipeline_id": pipeline_id,
             "status_id": status_id,
             "_embedded": {
