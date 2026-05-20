@@ -224,6 +224,42 @@ class ConversationStorage:
                     conversation.messages_count,
                 )
 
+    async def delete_by_platform_id(self, platform_id: str, bot_name: str) -> bool:
+        """
+        Удалить запись диалога по паре (platform_id, bot_name).
+
+        Вызывается когда привязанная сделка закрыта — чтобы при следующем
+        сообщении клиента создался новый диалог с новой сделкой.
+
+        Args:
+            platform_id: Telegram ID клиента
+            bot_name: Название бота
+
+        Returns:
+            True если запись была удалена, False если не найдена
+        """
+        async with self.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(Conversation).where(
+                    Conversation.platform_id == platform_id,
+                    Conversation.bot_name == bot_name,
+                )
+            )
+            conversation = result.scalars().first()
+
+            if not conversation:
+                return False
+
+            await session.delete(conversation)
+            await session.commit()
+
+            logger.info(
+                "Conversation deleted (lead closed): platform_id=%s, bot_name=%s",
+                platform_id,
+                bot_name,
+            )
+            return True
+
     async def close(self) -> None:
         """Закрыть все соединения с БД."""
         await self.engine.dispose()

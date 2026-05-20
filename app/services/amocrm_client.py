@@ -426,6 +426,23 @@ class AmoCRMClient:
             logger.error("Error updating contact: %s", e)
             raise
 
+    async def get_lead(self, lead_id: int) -> dict[str, Any] | None:
+        """
+        Получить сделку по ID.
+
+        Args:
+            lead_id: ID сделки в amoCRM
+
+        Returns:
+            Данные сделки или None если не найдена
+        """
+        logger.debug("Fetching lead: %s", lead_id)
+        try:
+            return await self._make_request("GET", f"/leads/{lead_id}")
+        except Exception as e:
+            logger.error("Error fetching lead %s: %s", lead_id, e)
+            return None
+
     async def check_duplicate_lead(
         self,
         contact_id: int,
