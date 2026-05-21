@@ -1,4 +1,5 @@
 """Менеджер диалогов Salebot ↔ amoCRM."""
+import hashlib
 import logging
 from uuid import uuid4
 
@@ -8,7 +9,17 @@ from app.services.amocrm_client import AmoCRMClient
 from app.services.amojo_client import AmojoClient
 from app.services.salebot_client import SalebotClient
 from app.settings import settings
+from app.utils.redis_connection import get_redis
+
 logger = logging.getLogger(__name__)
+
+_ECHO_TTL = 15  # секунд
+
+
+def _echo_key(platform_id: str, bot_name: str, text: str) -> str:
+    """Redis-ключ для дедупликации эхо-сообщений менеджера."""
+    digest = hashlib.md5(text.encode("utf-8")).hexdigest()
+    return f"echo:{platform_id}:{bot_name}:{digest}"
 
 
 class ConversationManager:
@@ -375,6 +386,63 @@ class ConversationManager:
         except Exception as e:
             logger.warning("Failed to update UTM for lead %s: %s", lead_id, e)
 
+    async def handle_bot_message(
+        self,
+        platform_id: str,
+        bot_name: str,
+        message_text: str,
+    ) -> None:
+        """
+        Переслать сообщение бота в amojo (отображается как второй участник диалога).
+
+        Вызывается когда Salebot присылает вебхук с is_input=0 (сообщение от бота).
+        Если диалог ещё не создан в БД — пропускаем (не создаём сделку из бот-сообщения).
+
+        Args:
+            platform_id: Telegram ID клиента
+            bot_name: Название бота
+            message_text: Текст сообщения бота
+        """
+        # Проверяем: не является ли это эхом сообщения, которое мы сами отправили в Salebot
+        if message_text:
+            redis = get_redis()
+            key = _echo_key(platform_id, bot_name, message_text)
+            is_echo = await redis.getdel(key)
+            if is_echo:
+                logger.info(
+                    "Echo suppressed for platform_id=%s, bot=%s, text=%r",
+                    platform_id,
+                    bot_name,
+                    message_text[:60],
+                )
+                return
+
+        conversation = await self.storage.get_by_platform_id(platform_id, bot_name)
+
+        if not conversation:
+            logger.debug(
+                "No conversation for bot message, skipping: platform_id=%s, bot=%s",
+                platform_id,
+                bot_name,
+            )
+            return
+
+        from uuid import uuid4
+        await self.amojo.send_incoming_message(
+            conversation_id=conversation.conversation_id,
+            msgid=f"bot:{uuid4().hex}",
+            sender_id=f"tg:{platform_id}",
+            sender_name=conversation.client_name or platform_id,
+            text=message_text,
+            silent=True,
+        )
+
+        logger.info(
+            "Bot message forwarded to amojo: conversation=%s, bot=%s",
+            conversation.conversation_id,
+            bot_name,
+        )
+
     async def handle_amojo_message(
         self,
         conversation_id: str,
@@ -417,6 +485,12 @@ class ConversationManager:
                     "Failed to proxy media, sending text only: url=%s",
                     media_url,
                 )
+
+        # Помечаем сообщение как "отправленное нами" — чтобы Salebot-эхо не дублировалось в amojo
+        if message_text:
+            redis = get_redis()
+            key = _echo_key(conversation.platform_id, conversation.bot_name, message_text)
+            await redis.setex(key, _ECHO_TTL, "1")
 
         await self.salebot.send_message(
             client_id=conversation.salebot_client_id,

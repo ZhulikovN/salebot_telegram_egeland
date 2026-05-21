@@ -115,7 +115,7 @@ async def process_salebot_message(data: dict) -> None:
     # Идентификатор диалога: пара клиент+бот (каждый бот — отдельный диалог)
     conversation_key = f"{platform_id}:{bot_name}"
     lock_key = f"lock:conversation:{conversation_key}"
-    
+
     # Добавляем сообщение в очередь конкретного диалога
     try:
         await push_conversation_message(conversation_key, {
@@ -128,14 +128,15 @@ async def process_salebot_message(data: dict) -> None:
             "attachments": data.get("attachments") or [],
             "tg_username": data.get("tg_username"),
             "utm_data": data.get("utm_data"),
+            "is_bot_message": data.get("is_bot_message", False),
         })
-        
+
         # Увеличиваем счётчик необработанных сообщений
         redis = get_redis()
         counter_key = f"counter:salebot:{conversation_key}"
         await redis.incr(counter_key)
         await redis.expire(counter_key, 3600)  # TTL 1 час
-        
+
         logger.debug("Message added to conversation queue: %s", conversation_key)
     except Exception as e:
         logger.error("Failed to add message to conversation queue: %s", e)
@@ -221,21 +222,34 @@ async def process_salebot_message(data: dict) -> None:
             # Обрабатываем каждое сообщение по порядку (FIFO)
             for msg in messages:
                 try:
-                    conversation_id = await manager.handle_salebot_message(
-                        platform_id=msg["platform_id"],
-                        bot_name=msg["bot_name"],
-                        salebot_client_id=msg["salebot_client_id"],
-                        client_name=msg["client_name"],
-                        message_text=msg["message_text"],
-                        attachments=msg.get("attachments") or [],
-                        tg_username=msg.get("tg_username"),
-                        utm_data=msg.get("utm_data"),
-                    )
-                    
-                    logger.debug(
-                        "Salebot message processed: conversation_id=%s",
-                        conversation_id,
-                    )
+                    if msg.get("is_bot_message"):
+                        # Сообщение от бота — пересылаем в amojo с отправителем "Бот"
+                        await manager.handle_bot_message(
+                            platform_id=msg["platform_id"],
+                            bot_name=msg["bot_name"],
+                            message_text=msg["message_text"] or "",
+                        )
+                        logger.debug(
+                            "Bot message forwarded: platform_id=%s, bot=%s",
+                            msg["platform_id"],
+                            msg["bot_name"],
+                        )
+                    else:
+                        # Сообщение от клиента — стандартная обработка
+                        conversation_id = await manager.handle_salebot_message(
+                            platform_id=msg["platform_id"],
+                            bot_name=msg["bot_name"],
+                            salebot_client_id=msg["salebot_client_id"],
+                            client_name=msg["client_name"],
+                            message_text=msg["message_text"],
+                            attachments=msg.get("attachments") or [],
+                            tg_username=msg.get("tg_username"),
+                            utm_data=msg.get("utm_data"),
+                        )
+                        logger.debug(
+                            "Salebot message processed: conversation_id=%s",
+                            conversation_id,
+                        )
                     
                     # Уменьшаем счётчик после успешной обработки
                     new_counter = await redis.decr(counter_key)
