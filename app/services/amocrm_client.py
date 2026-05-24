@@ -131,6 +131,10 @@ class AmoCRMClient:
                 logger.error(
                     "AmoCRM API error (attempt %d/%d): %s", attempt + 1, retry, e
                 )
+                # 403 — IP заблокирован, retry бессмысленен
+                if "IP blocked 403" in str(e):
+                    logger.error("IP blocked by AmoCRM, aborting retries for %s %s", method, endpoint)
+                    raise
                 if attempt == retry - 1:
                     logger.error("All retry attempts failed for %s %s", method, endpoint)
                     raise
@@ -160,6 +164,11 @@ class AmoCRMClient:
         Raises:
             aiohttp.ClientError: При ошибке API
         """
+        if response.status == 403:
+            text = await response.text()
+            logger.error("AmoCRM IP blocked (403) — stopping retries: %s", text[:200])
+            raise aiohttp.ClientError(f"IP blocked 403: {text[:200]}")
+
         if response.status == 429:
             logger.warning("AmoCRM rate limit exceeded (429)")
             await asyncio.sleep(1)
@@ -801,6 +810,7 @@ class AmoCRMClient:
 
         try:
             await self._ensure_session()
+            await self._rate_limit()
 
             async with self.session.post(
                 url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=30)

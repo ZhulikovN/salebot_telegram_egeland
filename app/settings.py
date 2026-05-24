@@ -106,7 +106,7 @@ class Settings(BaseSettings):
 
     # Rate Limiting
     AMOCRM_MAX_REQUESTS_PER_SECOND: int = Field(
-        default=7,
+        default=5,
         description="Максимальное количество запросов к AmoCRM API в секунду",
         ge=1,
         le=10,
