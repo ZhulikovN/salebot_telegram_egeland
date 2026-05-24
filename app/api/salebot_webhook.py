@@ -31,10 +31,15 @@ async def salebot_webhook(webhook: SalebotWebhook, request: Request) -> dict[str
         Статус обработки
     """
     try:
-        # Проверяем что сообщение от клиента
-        if not webhook.is_from_client:
-            logger.info("Message from bot, ignoring: %s", webhook.id)
-            return {"status": "ignored", "reason": "message_from_bot"}
+        # Диагностический лог: показывает ВСЁ что приходит от Salebot (is_input=1 и is_input=0)
+        logger.info(
+            "SALEBOT_RAW: id=%s, is_input=%s, platform_id=%s, bot=%s, message=%r",
+            webhook.id,
+            webhook.is_input,
+            webhook.platform_id,
+            webhook.bot_name,
+            (webhook.message or "")[:80],
+        )
 
         # Игнорируем служебные события (вход/выход из групповых чатов)
         if webhook.message in ("new_chat_member", "left_chat_member"):
@@ -54,15 +59,21 @@ async def salebot_webhook(webhook: SalebotWebhook, request: Request) -> dict[str
         # Имя клиента: если нет — используем tg_username
         client_name = webhook.client.name or tg_username or str(webhook.platform_id)
 
+        is_bot = not webhook.is_from_client
+
+        # Сообщения бота без текста не несут смысла в amoCRM
+        if is_bot and not webhook.message:
+            logger.debug("Bot message without text, ignoring: %s", webhook.id)
+            return {"status": "ignored", "reason": "bot_message_no_text"}
+
         msg_preview = (webhook.message or "")[:50]
         logger.info(
-            "Salebot webhook: platform_id=%s, bot=%s, message=%r, attachments=%s",
+            "Salebot webhook: platform_id=%s, bot=%s, is_bot=%s, message=%r",
             webhook.platform_id,
             webhook.bot_name,
+            is_bot,
             msg_preview,
-            webhook.attachments,
         )
-        # logger.info("Salebot webhook FULL PAYLOAD: %s", webhook.model_dump())
 
         await push_task(
             "salebot_message",
@@ -75,10 +86,15 @@ async def salebot_webhook(webhook: SalebotWebhook, request: Request) -> dict[str
                 "attachments": webhook.attachments or [],
                 "tg_username": tg_username,
                 "utm_data": webhook.utm_data,
+                "is_bot_message": is_bot,
             },
         )
 
-        logger.info("Salebot message queued: platform_id=%s", webhook.platform_id)
+        logger.info(
+            "Salebot message queued: platform_id=%s, is_bot=%s",
+            webhook.platform_id,
+            is_bot,
+        )
         return {"status": "ok", "queued": True}
 
     except Exception as e:
