@@ -184,6 +184,23 @@ class ConversationManager:
                 conversation.conversation_id,
             )
 
+        # Проверяем ключевые слова и ставим теги на сделку (best-effort, не блокирует)
+        if message_text and conversation.lead_id:
+            bot_config = get_bot_config(bot_name)
+            if bot_config.keywords:
+                text_lower = message_text.lower()
+                for keyword, tag_name in bot_config.keywords:
+                    if keyword in text_lower:
+                        try:
+                            await self.amocrm.add_lead_tag(conversation.lead_id, tag_name)
+                        except Exception as e:
+                            logger.warning(
+                                "Failed to add tag %r to lead %s: %s",
+                                tag_name,
+                                conversation.lead_id,
+                                e,
+                            )
+
         return conversation.conversation_id
 
     async def _create_new_conversation(
