@@ -189,17 +189,9 @@ class ConversationManager:
             bot_config = get_bot_config(bot_name)
             if bot_config.keywords:
                 text_lower = message_text.lower()
-                for keyword, tag_name in bot_config.keywords:
+                for keyword, tag_id in bot_config.keywords:
                     if keyword in text_lower:
-                        try:
-                            await self.amocrm.add_lead_tag(conversation.lead_id, tag_name)
-                        except Exception as e:
-                            logger.warning(
-                                "Failed to add tag %r to lead %s: %s",
-                                tag_name,
-                                conversation.lead_id,
-                                e,
-                            )
+                        await self.amocrm.add_lead_tag(conversation.lead_id, tag_id)
 
         return conversation.conversation_id
 

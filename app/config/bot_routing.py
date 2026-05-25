@@ -11,9 +11,9 @@ class BotConfig:
     pipeline_id: int
     status_id: int
     lead_name: str
-    # Маппинг: lowercase-ключевое слово → название тега.
-    # Если сообщение содержит ключевое слово — тег добавляется к сделке.
-    keywords: tuple[tuple[str, str], ...] = field(default=())
+    # Маппинг: (lowercase-ключевое слово, tag_id в AmoCRM).
+    # Если сообщение содержит ключевое слово — тег добавляется к сделке по ID.
+    keywords: tuple[tuple[str, int], ...] = field(default=())
 
 
 # Конфигурация для каждого бота.
@@ -31,8 +31,8 @@ _BOT_CONFIGS: dict[str, BotConfig] = {
         status_id=settings.AMOCRM_STATUS_ID_IG_MIKHAIL,
         lead_name="Заявка: IG - mikhail_matematik",
         keywords=(
-            ("диагностика", "ДИАГНОСТИКА"),
-            ("курс", "КУРС"),
+            ("диагностика", 916729),
+            ("курс", 737540),
         ),
     ),
     "el_connetbot": BotConfig(
