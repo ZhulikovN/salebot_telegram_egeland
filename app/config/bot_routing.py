@@ -1,5 +1,5 @@
 """Маршрутизация ботов Salebot: воронка, этап и название сделки."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from app.settings import settings
 
@@ -11,11 +11,30 @@ class BotConfig:
     pipeline_id: int
     status_id: int
     lead_name: str
+    # Маппинг: lowercase-ключевое слово → название тега.
+    # Если сообщение содержит ключевое слово — тег добавляется к сделке.
+    keywords: tuple[tuple[str, str], ...] = field(default=())
 
 
 # Конфигурация для каждого бота.
 # Ключ — значение поля client.group из вебхука Salebot (название бота).
 _BOT_CONFIGS: dict[str, BotConfig] = {
+    # Max messenger
+    "278172561": BotConfig(
+        pipeline_id=settings.AMOCRM_PIPELINE_ID_LEADS,
+        status_id=settings.AMOCRM_STATUS_ID_LEADS,
+        lead_name="Заявка: MAX - Перегон - @egeland_connection_bot",
+    ),
+    # Instagram
+    "mikhail_matematik": BotConfig(
+        pipeline_id=settings.AMOCRM_PIPELINE_ID_IG_MIKHAIL,
+        status_id=settings.AMOCRM_STATUS_ID_IG_MIKHAIL,
+        lead_name="Заявка: IG - mikhail_matematik",
+        keywords=(
+            ("диагностика", "ДИАГНОСТИКА"),
+            ("курс", "КУРС"),
+        ),
+    ),
     "el_connetbot": BotConfig(
         pipeline_id=settings.AMOCRM_PIPELINE_ID_LEADS,
         status_id=settings.AMOCRM_STATUS_ID_LEADS,

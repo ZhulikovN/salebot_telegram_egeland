@@ -83,6 +83,14 @@ class Settings(BaseSettings):
         default=83375282, description="ID этапа создания сделки для лид-ботов"
     )
 
+    # Воронка и этап — Instagram mikhail_matematik
+    AMOCRM_PIPELINE_ID_IG_MIKHAIL: int = Field(
+        default=10243538, description="ID воронки для Instagram mikhail_matematik"
+    )
+    AMOCRM_STATUS_ID_IG_MIKHAIL: int = Field(
+        default=81078194, description="ID этапа для Instagram mikhail_matematik"
+    )
+
     # Статусы закрытых этапов (для проверки дублей)
     STATUS_SUCCESS: int = Field(default=142, description="ID статуса 'Успешно'")
     STATUS_CLOSED: int = Field(default=143, description="ID статуса 'Закрыто'")

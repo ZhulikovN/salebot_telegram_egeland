@@ -443,13 +443,13 @@ class AmoCRMClient:
             lead_id: ID сделки в amoCRM
 
         Returns:
-            Данные сделки или None если не найдена
+            Данные сделки или None если не найдена (404, слита, удалена)
         """
         logger.debug("Fetching lead: %s", lead_id)
         try:
-            return await self._make_request("GET", f"/leads/{lead_id}")
+            return await self._make_request("GET", f"/leads/{lead_id}", retry=1)
         except Exception as e:
-            logger.error("Error fetching lead %s: %s", lead_id, e)
+            logger.warning("Lead %s not found or error: %s", lead_id, e)
             return None
 
     async def check_duplicate_lead(
@@ -855,6 +855,39 @@ class AmoCRMClient:
         except Exception as e:
             logger.error("Error linking chat to contact: %s", e)
             raise
+
+    async def add_lead_tag(self, lead_id: int, tag_name: str) -> None:
+        """
+        Добавить тег к сделке без удаления существующих тегов.
+
+        Args:
+            lead_id: ID сделки
+            tag_name: Название тега
+        """
+        logger.info("Adding tag %r to lead %s", tag_name, lead_id)
+        try:
+            lead = await self._make_request(
+                "GET", f"/leads/{lead_id}", params={"with": "tags"}
+            )
+            existing_tags: list[dict] = lead.get("_embedded", {}).get("tags", [])
+
+            existing_names = {t.get("name", "").upper() for t in existing_tags}
+            if tag_name.upper() in existing_names:
+                logger.debug("Tag %r already exists on lead %s, skipping", tag_name, lead_id)
+                return
+
+            # Существующие теги передаём по ID, новый — по имени
+            tags_payload = [{"id": t["id"]} for t in existing_tags if t.get("id")]
+            tags_payload.append({"name": tag_name})
+
+            await self._make_request(
+                "PATCH",
+                f"/leads/{lead_id}",
+                data={"_embedded": {"tags": tags_payload}},
+            )
+            logger.info("Tag %r added to lead %s", tag_name, lead_id)
+        except Exception as e:
+            logger.warning("Failed to add tag %r to lead %s: %s", tag_name, lead_id, e)
 
     async def create_task(
         self,
