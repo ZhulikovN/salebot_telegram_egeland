@@ -234,6 +234,7 @@ class ConversationManager:
                 client_name=client_name,
                 tg_username=tg_username,
                 utm_data=utm_data,
+                platform_id_field=bot_config.platform_id_field,
             )
 
             # 2. Проверить дубль сделки в нужной воронке (зависит от бота)
@@ -317,43 +318,47 @@ class ConversationManager:
         client_name: str,
         tg_username: str | None,
         utm_data: dict | None = None,
+        platform_id_field: int | None = None,
     ) -> int:
         """
         Найти существующий контакт или создать новый.
 
-        Поиск по TG ID → поиск по username → создание.
-        При нахождении: дополняет только пустые tg-поля (старые данные приоритетнее).
+        Поиск по platform_id → поиск по username → создание.
+        При нахождении: дополняет только пустые поля (старые данные приоритетнее).
         UTM хранятся в сделке, не в контакте.
 
         Args:
-            platform_id: Telegram ID
+            platform_id: ID клиента в мессенджере
             client_name: Имя клиента
             tg_username: Telegram username (без @)
             utm_data: не используется здесь (UTM пишутся в сделку)
+            platform_id_field: ID поля AmoCRM для хранения platform_id (по умолчанию FIELD_TG_ID)
 
         Returns:
             ID контакта в AMO
         """
-        # Поиск по TG ID
-        contact = await self.amocrm.find_contact_by_tg_id(platform_id)
+        pid_field = platform_id_field or settings.FIELD_TG_ID
 
-        # Поиск по username если не нашли по TG ID
-        if not contact and tg_username:
+        # Поиск по platform_id в нужном поле
+        contact = await self.amocrm.find_contact_by_tg_id(platform_id, platform_id_field=pid_field)
+
+        # Поиск по username если не нашли по platform_id (только для TG-ботов)
+        if not contact and tg_username and pid_field == settings.FIELD_TG_ID:
             contact = await self.amocrm.find_contact_by_username(tg_username)
 
         if contact:
             contact_id = contact["id"]
             logger.info("Found existing contact: %s", contact_id)
 
-            # Дополняем только пустые TG-поля (старые данные приоритетнее)
+            # Дополняем только пустые поля (старые данные приоритетнее)
             existing_fields = self.amocrm._parse_custom_fields(
                 contact.get("custom_fields_values")
             )
 
             fields_to_update: dict[int, str] = {}
 
-            if not existing_fields.get(settings.FIELD_TG_ID):
-                fields_to_update[settings.FIELD_TG_ID] = platform_id
+            if not existing_fields.get(pid_field):
+                fields_to_update[pid_field] = platform_id
 
             if tg_username and not existing_fields.get(settings.FIELD_TG_USERNAME):
                 fields_to_update[settings.FIELD_TG_USERNAME] = tg_username
@@ -368,6 +373,7 @@ class ConversationManager:
             name=client_name,
             tg_id=platform_id,
             tg_username=tg_username,
+            platform_id_field=pid_field,
         )
         logger.info("New contact created: %s", contact_id)
         return contact_id

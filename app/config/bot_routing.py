@@ -14,6 +14,9 @@ class BotConfig:
     # Маппинг: (lowercase-ключевое слово, tag_id в AmoCRM).
     # Если сообщение содержит ключевое слово — тег добавляется к сделке по ID.
     keywords: tuple[tuple[str, int], ...] = field(default=())
+    # ID поля контакта для хранения platform_id.
+    # None = дефолт (FIELD_TG_ID). Для Max нужно FIELD_MAX_USER_ID.
+    platform_id_field: int | None = field(default=None)
 
 
 # Конфигурация для каждого бота.
@@ -24,6 +27,7 @@ _BOT_CONFIGS: dict[str, BotConfig] = {
         pipeline_id=settings.AMOCRM_PIPELINE_ID_LEADS,
         status_id=settings.AMOCRM_STATUS_ID_LEADS,
         lead_name="Заявка: MAX - Перегон - @egeland_connection_bot",
+        platform_id_field=settings.FIELD_MAX_USER_ID,
     ),
     # Instagram
     "mikhail_matematik": BotConfig(

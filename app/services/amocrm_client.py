@@ -229,17 +229,21 @@ class AmoCRMClient:
 
         return result
 
-    async def find_contact_by_tg_id(self, tg_id: str) -> dict[str, Any] | None:
+    async def find_contact_by_tg_id(
+        self, tg_id: str, platform_id_field: int | None = None
+    ) -> dict[str, Any] | None:
         """
-        Найти контакт по полю TG ID.
+        Найти контакт по полю platform_id.
 
         Args:
-            tg_id: Telegram ID клиента (platform_id)
+            tg_id: ID клиента (platform_id)
+            platform_id_field: ID поля в AmoCRM (по умолчанию FIELD_TG_ID)
 
         Returns:
             Данные контакта или None если не найден
         """
-        logger.info("Searching contact by TG ID: %s", tg_id)
+        field_id = platform_id_field or settings.FIELD_TG_ID
+        logger.info("Searching contact by platform_id=%s (field=%s)", tg_id, field_id)
 
         try:
             response = await self._make_request(
@@ -254,15 +258,15 @@ class AmoCRMClient:
 
             for contact in contacts:
                 custom_fields = self._parse_custom_fields(contact.get("custom_fields_values"))
-                if custom_fields.get(settings.FIELD_TG_ID) == tg_id:
-                    logger.info("Found contact by TG ID: %s", contact["id"])
+                if custom_fields.get(field_id) == tg_id:
+                    logger.info("Found contact by platform_id field=%s: %s", field_id, contact["id"])
                     return contact
 
-            logger.info("Contact not found by TG ID: %s", tg_id)
+            logger.info("Contact not found by platform_id=%s (field=%s)", tg_id, field_id)
             return None
 
         except Exception as e:
-            logger.error("Error finding contact by TG ID: %s", e)
+            logger.error("Error finding contact by platform_id: %s", e)
             raise
 
     async def find_contact_by_username(self, username: str) -> dict[str, Any] | None:
@@ -308,27 +312,30 @@ class AmoCRMClient:
         tg_username: str | None = None,
         email: str | None = None,
         phone: str | None = None,
+        platform_id_field: int | None = None,
     ) -> int:
         """
         Создать новый контакт в AmoCRM.
 
         Args:
             name: Имя контакта
-            tg_id: Telegram ID (platform_id)
+            tg_id: ID клиента (platform_id)
             tg_username: Telegram username (без @)
             email: Email контакта
             phone: Телефон контакта
+            platform_id_field: ID поля для хранения platform_id (по умолчанию FIELD_TG_ID)
 
         Returns:
             ID созданного контакта
         """
-        logger.info("Creating contact: name=%s, tg_id=%s, username=%s, email=%s, phone=%s",
-                    name, tg_id, tg_username, email, phone)
+        field_id = platform_id_field or settings.FIELD_TG_ID
+        logger.info("Creating contact: name=%s, platform_id=%s, field=%s, username=%s",
+                    name, tg_id, field_id, tg_username)
 
         contact_data: dict[str, Any] = {
             "name": name,
             "custom_fields_values": [
-                {"field_id": settings.FIELD_TG_ID, "values": [{"value": tg_id}]},
+                {"field_id": field_id, "values": [{"value": tg_id}]},
             ],
         }
 
