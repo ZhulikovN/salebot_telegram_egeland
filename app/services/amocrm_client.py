@@ -443,13 +443,13 @@ class AmoCRMClient:
             lead_id: ID сделки в amoCRM
 
         Returns:
-            Данные сделки или None если не найдена
+            Данные сделки или None если не найдена (404, слита, удалена)
         """
         logger.debug("Fetching lead: %s", lead_id)
         try:
-            return await self._make_request("GET", f"/leads/{lead_id}")
+            return await self._make_request("GET", f"/leads/{lead_id}", retry=1)
         except Exception as e:
-            logger.error("Error fetching lead %s: %s", lead_id, e)
+            logger.warning("Lead %s not found or error: %s", lead_id, e)
             return None
 
     async def check_duplicate_lead(

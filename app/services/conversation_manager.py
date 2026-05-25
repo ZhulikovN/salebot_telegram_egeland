@@ -78,13 +78,30 @@ class ConversationManager:
         conversation = await self.storage.get_by_platform_id(platform_id, bot_name)
 
         # Если диалог найден — проверяем, что привязанная сделка ещё открыта.
-        # Если сделка закрыта (142/143) — удаляем запись и создаём новый диалог.
+        # Если сделка закрыта (142/143) или недоступна (слита/удалена через merge) —
+        # удаляем запись и создаём новый диалог.
         if conversation and conversation.lead_id:
             lead = await self.amocrm.get_lead(conversation.lead_id)
-            if lead is not None:
+            logger.info(
+                "get_lead(%s) returned: status_id=%s, lead=%s",
+                conversation.lead_id,
+                lead.get("status_id") if lead else None,
+                "None" if lead is None else "dict",
+            )
+            if lead is None:
+                # 404 или API-ошибка: сделка слита, удалена или недоступна
+                logger.info(
+                    "Lead %s not found (merged/deleted), resetting conversation for platform_id=%s, bot=%s",
+                    conversation.lead_id,
+                    platform_id,
+                    bot_name,
+                )
+                await self.storage.delete_by_platform_id(platform_id, bot_name)
+                conversation = None
+            else:
                 closed_statuses = {settings.STATUS_SUCCESS, settings.STATUS_CLOSED}
                 lead_status = lead.get("status_id")
-                if lead_status in closed_statuses:
+                if lead_status is None or lead_status in closed_statuses:
                     logger.info(
                         "Lead %s is closed (status=%s), resetting conversation for platform_id=%s, bot=%s",
                         conversation.lead_id,
