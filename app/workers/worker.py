@@ -270,8 +270,15 @@ async def process_salebot_message(data: dict) -> None:
                         e,
                         exc_info=True,
                     )
-                    # НЕ уменьшаем счётчик при ошибке (сообщение не обработано)
-                    # Продолжаем обработку следующих сообщений
+                    # Уменьшаем счётчик даже при ошибке: сообщение уже извлечено
+                    # из очереди и не может быть обработано повторно.
+                    new_counter = await redis.decr(counter_key)
+                    logger.debug(
+                        "Salebot counter decremented after error: %s (now %d)",
+                        conversation_key,
+                        new_counter,
+                    )
+                    total_processed += 1
         
         logger.info(
             "Batch processing completed for conversation %s: %d total messages processed",
@@ -438,8 +445,17 @@ async def process_amojo_message(data: dict) -> None:
                         e,
                         exc_info=True,
                     )
-                    # НЕ уменьшаем счётчик при ошибке (сообщение не обработано)
-                    # Продолжаем обработку следующих сообщений
+                    # Уменьшаем счётчик даже при ошибке: сообщение уже извлечено
+                    # из очереди и не может быть обработано повторно.
+                    # Без декремента счётчик остаётся > 0 при пустой очереди
+                    # и воркер зависает в бесконечном цикле sleep(0.1).
+                    new_counter = await redis.decr(counter_key)
+                    logger.debug(
+                        "Amojo counter decremented after error: %s (now %d)",
+                        conversation_id,
+                        new_counter,
+                    )
+                    total_processed += 1
         
         logger.info(
             "Batch processing completed for conversation %s: %d total messages processed",
