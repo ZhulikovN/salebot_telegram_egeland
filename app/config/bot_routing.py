@@ -3,6 +3,19 @@ from dataclasses import dataclass, field
 
 from app.settings import settings
 
+# Общие триггеры для обновления полей сделки по тексту кнопки.
+# Формат: (точный_текст_кнопки, field_id_в_amo, enum_id_в_amo).
+# Поле 809891 "Инициатор сделки", поле 809893 "Класс".
+_COMMON_FIELD_TRIGGERS: tuple[tuple[str, int, int], ...] = (
+    ("Родитель",  809891, 1374865),
+    ("Ученик",    809891, 1374867),
+    ("7 класс",   809893, 1378765),
+    ("8 класс",   809893, 1378767),
+    ("9 класс",   809893, 1374871),
+    ("10 класс",  809893, 1374873),
+    ("11 класс",  809893, 1374875),
+)
+
 
 @dataclass(frozen=True)
 class BotConfig:
@@ -17,6 +30,10 @@ class BotConfig:
     # ID поля контакта для хранения platform_id.
     # None = дефолт (FIELD_TG_ID). Для Max нужно FIELD_MAX_USER_ID.
     platform_id_field: int | None = field(default=None)
+    # Триггеры обновления select-полей сделки по точному тексту кнопки.
+    # Формат: (текст_кнопки, field_id, enum_id).
+    # По умолчанию применяются общие триггеры для всех ботов.
+    field_triggers: tuple[tuple[str, int, int], ...] = field(default=_COMMON_FIELD_TRIGGERS)
 
 
 # Конфигурация для каждого бота.

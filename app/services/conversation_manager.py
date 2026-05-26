@@ -193,6 +193,13 @@ class ConversationManager:
                     if keyword in text_lower:
                         await self.amocrm.add_lead_tag(conversation.lead_id, tag_id)
 
+        # Обновляем select-поля сделки по точному совпадению текста кнопки
+        if message_text and conversation.lead_id:
+            bot_config = get_bot_config(bot_name)
+            for trigger_text, field_id, enum_id in bot_config.field_triggers:
+                if message_text == trigger_text:
+                    await self.amocrm.update_lead_enum(conversation.lead_id, field_id, enum_id)
+
         return conversation.conversation_id
 
     async def _create_new_conversation(

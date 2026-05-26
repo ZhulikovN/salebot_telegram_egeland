@@ -632,6 +632,31 @@ class AmoCRMClient:
             logger.error("Error creating lead: %s", e)
             raise
 
+    async def update_lead_enum(self, lead_id: int, field_id: int, enum_id: int) -> None:
+        """
+        Обновить select-поле сделки по enum_id.
+
+        Args:
+            lead_id: ID сделки
+            field_id: ID поля типа select
+            enum_id: ID варианта выбора
+        """
+        logger.info("Updating lead %s: field=%s enum=%s", lead_id, field_id, enum_id)
+        try:
+            await self._make_request(
+                "PATCH",
+                "/leads",
+                data=[{
+                    "id": lead_id,
+                    "custom_fields_values": [
+                        {"field_id": field_id, "values": [{"enum_id": enum_id}]},
+                    ],
+                }],
+            )
+            logger.info("Lead %s field=%s updated to enum=%s", lead_id, field_id, enum_id)
+        except Exception as e:
+            logger.warning("Failed to update lead %s field=%s: %s", lead_id, field_id, e)
+
     async def update_lead(self, lead_id: int, fields: dict[int, Any]) -> None:
         """
         Обновить кастомные поля сделки.
