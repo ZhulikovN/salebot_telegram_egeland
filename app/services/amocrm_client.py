@@ -229,17 +229,21 @@ class AmoCRMClient:
 
         return result
 
-    async def find_contact_by_tg_id(self, tg_id: str) -> dict[str, Any] | None:
+    async def find_contact_by_tg_id(
+        self, tg_id: str, platform_id_field: int | None = None
+    ) -> dict[str, Any] | None:
         """
-        Найти контакт по полю TG ID.
+        Найти контакт по полю platform_id.
 
         Args:
-            tg_id: Telegram ID клиента (platform_id)
+            tg_id: ID клиента (platform_id)
+            platform_id_field: ID поля в AmoCRM (по умолчанию FIELD_TG_ID)
 
         Returns:
             Данные контакта или None если не найден
         """
-        logger.info("Searching contact by TG ID: %s", tg_id)
+        field_id = platform_id_field or settings.FIELD_TG_ID
+        logger.info("Searching contact by platform_id=%s (field=%s)", tg_id, field_id)
 
         try:
             response = await self._make_request(
@@ -254,15 +258,15 @@ class AmoCRMClient:
 
             for contact in contacts:
                 custom_fields = self._parse_custom_fields(contact.get("custom_fields_values"))
-                if custom_fields.get(settings.FIELD_TG_ID) == tg_id:
-                    logger.info("Found contact by TG ID: %s", contact["id"])
+                if custom_fields.get(field_id) == tg_id:
+                    logger.info("Found contact by platform_id field=%s: %s", field_id, contact["id"])
                     return contact
 
-            logger.info("Contact not found by TG ID: %s", tg_id)
+            logger.info("Contact not found by platform_id=%s (field=%s)", tg_id, field_id)
             return None
 
         except Exception as e:
-            logger.error("Error finding contact by TG ID: %s", e)
+            logger.error("Error finding contact by platform_id: %s", e)
             raise
 
     async def find_contact_by_username(self, username: str) -> dict[str, Any] | None:
@@ -308,27 +312,30 @@ class AmoCRMClient:
         tg_username: str | None = None,
         email: str | None = None,
         phone: str | None = None,
+        platform_id_field: int | None = None,
     ) -> int:
         """
         Создать новый контакт в AmoCRM.
 
         Args:
             name: Имя контакта
-            tg_id: Telegram ID (platform_id)
+            tg_id: ID клиента (platform_id)
             tg_username: Telegram username (без @)
             email: Email контакта
             phone: Телефон контакта
+            platform_id_field: ID поля для хранения platform_id (по умолчанию FIELD_TG_ID)
 
         Returns:
             ID созданного контакта
         """
-        logger.info("Creating contact: name=%s, tg_id=%s, username=%s, email=%s, phone=%s",
-                    name, tg_id, tg_username, email, phone)
+        field_id = platform_id_field or settings.FIELD_TG_ID
+        logger.info("Creating contact: name=%s, platform_id=%s, field=%s, username=%s",
+                    name, tg_id, field_id, tg_username)
 
         contact_data: dict[str, Any] = {
             "name": name,
             "custom_fields_values": [
-                {"field_id": settings.FIELD_TG_ID, "values": [{"value": tg_id}]},
+                {"field_id": field_id, "values": [{"value": tg_id}]},
             ],
         }
 
@@ -625,6 +632,31 @@ class AmoCRMClient:
             logger.error("Error creating lead: %s", e)
             raise
 
+    async def update_lead_enum(self, lead_id: int, field_id: int, enum_id: int) -> None:
+        """
+        Обновить select-поле сделки по enum_id.
+
+        Args:
+            lead_id: ID сделки
+            field_id: ID поля типа select
+            enum_id: ID варианта выбора
+        """
+        logger.info("Updating lead %s: field=%s enum=%s", lead_id, field_id, enum_id)
+        try:
+            await self._make_request(
+                "PATCH",
+                "/leads",
+                data=[{
+                    "id": lead_id,
+                    "custom_fields_values": [
+                        {"field_id": field_id, "values": [{"enum_id": enum_id}]},
+                    ],
+                }],
+            )
+            logger.info("Lead %s field=%s updated to enum=%s", lead_id, field_id, enum_id)
+        except Exception as e:
+            logger.warning("Failed to update lead %s field=%s: %s", lead_id, field_id, e)
+
     async def update_lead(self, lead_id: int, fields: dict[int, Any]) -> None:
         """
         Обновить кастомные поля сделки.
@@ -856,38 +888,39 @@ class AmoCRMClient:
             logger.error("Error linking chat to contact: %s", e)
             raise
 
-    async def add_lead_tag(self, lead_id: int, tag_name: str) -> None:
+    async def add_lead_tag(self, lead_id: int, tag_id: int) -> None:
         """
         Добавить тег к сделке без удаления существующих тегов.
 
         Args:
             lead_id: ID сделки
-            tag_name: Название тега
+            tag_id: ID тега в AmoCRM (постоянный, создаётся один раз вручную)
         """
-        logger.info("Adding tag %r to lead %s", tag_name, lead_id)
+        logger.info("Adding tag id=%s to lead %s", tag_id, lead_id)
         try:
+            # Получить текущие теги сделки
             lead = await self._make_request(
                 "GET", f"/leads/{lead_id}", params={"with": "tags"}
             )
             existing_tags: list[dict] = lead.get("_embedded", {}).get("tags", [])
 
-            existing_names = {t.get("name", "").upper() for t in existing_tags}
-            if tag_name.upper() in existing_names:
-                logger.debug("Tag %r already exists on lead %s, skipping", tag_name, lead_id)
+            existing_ids = {t["id"] for t in existing_tags if t.get("id")}
+            if tag_id in existing_ids:
+                logger.debug("Tag id=%s already exists on lead %s, skipping", tag_id, lead_id)
                 return
 
-            # Существующие теги передаём по ID, новый — по имени
+            # PATCH: существующие теги + новый, все по ID
             tags_payload = [{"id": t["id"]} for t in existing_tags if t.get("id")]
-            tags_payload.append({"name": tag_name})
+            tags_payload.append({"id": tag_id})
 
             await self._make_request(
                 "PATCH",
-                f"/leads/{lead_id}",
-                data={"_embedded": {"tags": tags_payload}},
+                "/leads",
+                data=[{"id": lead_id, "_embedded": {"tags": tags_payload}}],
             )
-            logger.info("Tag %r added to lead %s", tag_name, lead_id)
+            logger.info("Tag id=%s added to lead %s", tag_id, lead_id)
         except Exception as e:
-            logger.warning("Failed to add tag %r to lead %s: %s", tag_name, lead_id, e)
+            logger.warning("Failed to add tag id=%s to lead %s: %s", tag_id, lead_id, e)
 
     async def create_task(
         self,

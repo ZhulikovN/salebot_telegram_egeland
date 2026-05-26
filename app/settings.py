@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     FIELD_TG_USERNAME: int = Field(
         default=811308, description="ID поля Telegram username (Radist.online)"
     )
+    FIELD_MAX_USER_ID: int = Field(
+        default=813975, description="ID поля Max user id (Radist.online)"
+    )
 
     # UTM-метки контакта (первое касание)
     FIELD_UTM_SOURCE: int = Field(default=688736, description="ID поля utm_source контакта")

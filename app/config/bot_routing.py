@@ -3,6 +3,19 @@ from dataclasses import dataclass, field
 
 from app.settings import settings
 
+# Общие триггеры для обновления полей сделки по тексту кнопки.
+# Формат: (точный_текст_кнопки, field_id_в_amo, enum_id_в_amo).
+# Поле 809891 "Инициатор сделки", поле 809893 "Класс".
+_COMMON_FIELD_TRIGGERS: tuple[tuple[str, int, int], ...] = (
+    ("Родитель",  809891, 1374865),
+    ("Ученик",    809891, 1374867),
+    ("7 класс",   809893, 1378765),
+    ("8 класс",   809893, 1378767),
+    ("9 класс",   809893, 1374871),
+    ("10 класс",  809893, 1374873),
+    ("11 класс",  809893, 1374875),
+)
+
 
 @dataclass(frozen=True)
 class BotConfig:
@@ -11,9 +24,16 @@ class BotConfig:
     pipeline_id: int
     status_id: int
     lead_name: str
-    # Маппинг: lowercase-ключевое слово → название тега.
-    # Если сообщение содержит ключевое слово — тег добавляется к сделке.
-    keywords: tuple[tuple[str, str], ...] = field(default=())
+    # Маппинг: (lowercase-ключевое слово, tag_id в AmoCRM).
+    # Если сообщение содержит ключевое слово — тег добавляется к сделке по ID.
+    keywords: tuple[tuple[str, int], ...] = field(default=())
+    # ID поля контакта для хранения platform_id.
+    # None = дефолт (FIELD_TG_ID). Для Max нужно FIELD_MAX_USER_ID.
+    platform_id_field: int | None = field(default=None)
+    # Триггеры обновления select-полей сделки по точному тексту кнопки.
+    # Формат: (текст_кнопки, field_id, enum_id).
+    # По умолчанию применяются общие триггеры для всех ботов.
+    field_triggers: tuple[tuple[str, int, int], ...] = field(default=_COMMON_FIELD_TRIGGERS)
 
 
 # Конфигурация для каждого бота.
@@ -24,6 +44,7 @@ _BOT_CONFIGS: dict[str, BotConfig] = {
         pipeline_id=settings.AMOCRM_PIPELINE_ID_LEADS,
         status_id=settings.AMOCRM_STATUS_ID_LEADS,
         lead_name="Заявка: MAX - Перегон - @egeland_connection_bot",
+        platform_id_field=settings.FIELD_MAX_USER_ID,
     ),
     # Instagram
     "mikhail_matematik": BotConfig(
@@ -31,8 +52,8 @@ _BOT_CONFIGS: dict[str, BotConfig] = {
         status_id=settings.AMOCRM_STATUS_ID_IG_MIKHAIL,
         lead_name="Заявка: IG - mikhail_matematik",
         keywords=(
-            ("диагностика", "ДИАГНОСТИКА"),
-            ("курс", "КУРС"),
+            ("диагностика", 916729),
+            ("курс", 737540),
         ),
     ),
     "el_connetbot": BotConfig(
