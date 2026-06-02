@@ -77,6 +77,10 @@ class ConversationManager:
         """
         conversation = await self.storage.get_by_platform_id(platform_id, bot_name)
 
+        # current_lead — данные сделки из get_lead, переиспользуются для pipeline_triggers
+        # чтобы не делать лишний GET-запрос.
+        current_lead: dict | None = None
+
         # Если диалог найден — проверяем, что привязанная сделка ещё открыта.
         # Если сделка закрыта (142/143) или недоступна (слита/удалена через merge) —
         # удаляем запись и создаём новый диалог.
@@ -111,6 +115,8 @@ class ConversationManager:
                     )
                     await self.storage.delete_by_platform_id(platform_id, bot_name)
                     conversation = None
+                else:
+                    current_lead = lead
 
         if not conversation:
             logger.info(
@@ -199,6 +205,26 @@ class ConversationManager:
             for trigger_text, field_id, enum_id in bot_config.field_triggers:
                 if message_text == trigger_text:
                     await self.amocrm.update_lead_enum(conversation.lead_id, field_id, enum_id)
+
+        # Перемещаем сделку в другую воронку по тексту кнопки (только один раз).
+        # Используем current_lead из уже сделанного get_lead — без лишнего GET-запроса.
+        if message_text and current_lead and conversation and conversation.lead_id:
+            bot_config = get_bot_config(bot_name)
+            for trigger_text, target_pipeline_id, target_status_id in bot_config.pipeline_triggers:
+                if message_text == trigger_text:
+                    if (current_lead.get("pipeline_id") != target_pipeline_id or
+                        current_lead.get("status_id") != target_status_id):
+                        await self.amocrm.move_lead(
+                            conversation.lead_id, target_pipeline_id, target_status_id
+                        )
+                    else:
+                        logger.debug(
+                            "Lead %s already in pipeline %s status %s, skipping move",
+                            conversation.lead_id,
+                            target_pipeline_id,
+                            target_status_id,
+                        )
+                    break
 
         return conversation.conversation_id
 

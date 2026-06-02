@@ -34,11 +34,30 @@ class BotConfig:
     # Формат: (текст_кнопки, field_id, enum_id).
     # По умолчанию применяются общие триггеры для всех ботов.
     field_triggers: tuple[tuple[str, int, int], ...] = field(default=_COMMON_FIELD_TRIGGERS)
+    # Триггеры перемещения сделки в другую воронку/этап по точному тексту кнопки.
+    # Формат: (текст_кнопки, pipeline_id, status_id).
+    # Перемещение происходит только один раз — если сделка уже в целевой воронке, пропускается.
+    pipeline_triggers: tuple[tuple[str, int, int], ...] = field(default=())
 
 
 # Конфигурация для каждого бота.
 # Ключ — значение поля client.group из вебхука Salebot (название бота).
 _BOT_CONFIGS: dict[str, BotConfig] = {
+    # Тестовый бот с переносом воронки по кнопкам
+    # TODO: заменить "test_el_salebot" на реальное имя бота из логов (bot=... в SALEBOT_RAW)
+    "test_el_salebot": BotConfig(
+        pipeline_id=settings.AMOCRM_PIPELINE_ID,
+        status_id=settings.AMOCRM_STATUS_ID,
+        lead_name="",
+        keywords=(
+            ("есть вопрос",             905921),   # тег ЕСТЬ ВОПРОС
+            ("присоединиться к курсу",  917405),   # тег ПРИСОЕДИНИТЬСЯ К КУРСУ
+        ),
+        pipeline_triggers=(
+            ("Есть вопрос",             10195498, 86072578),
+            ("Присоединиться к курсу",  10195498, 86072582),
+        ),
+    ),
     # Max messenger
     "278172561": BotConfig(
         pipeline_id=settings.AMOCRM_PIPELINE_ID_LEADS,
@@ -75,6 +94,11 @@ _BOT_CONFIGS: dict[str, BotConfig] = {
         pipeline_id=settings.AMOCRM_PIPELINE_ID_LEADS,
         status_id=settings.AMOCRM_STATUS_ID_LEADS,
         lead_name="Заявка: TG - ТелеМаркетинг - @el_edu_withbot",
+    ),
+    "el_personal_bot": BotConfig(
+        pipeline_id=9472270,
+        status_id=75778598,
+        lead_name="Заявка: TG - @el_personal_bot",
     ),
 }
 
