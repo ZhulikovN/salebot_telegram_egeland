@@ -16,6 +16,7 @@ import sys
 
 from typing import Any
 
+from app.services.amocrm_client import RetryableAmoCRMError
 from app.services.conversation_manager import ConversationManager
 from app.settings import settings
 from app.utils.redis_connection import get_redis
@@ -36,6 +37,11 @@ logger = logging.getLogger(__name__)
 
 # Флаг для graceful shutdown
 shutdown_requested = False
+
+# Максимальное количество повторных попыток при временных ошибках AmoCRM (502/503/504)
+_MAX_RETRY_ATTEMPTS = 5
+# Задержка перед повторной попыткой (секунды)
+_RETRY_DELAY = 30
 
 
 def handle_shutdown_signal(signum: int, frame: Any) -> None:
@@ -220,6 +226,7 @@ async def process_salebot_message(data: dict) -> None:
             )
             
             # Обрабатываем каждое сообщение по порядку (FIFO)
+            has_retries = False
             for msg in messages:
                 try:
                     if msg.get("is_bot_message"):
@@ -263,7 +270,28 @@ async def process_salebot_message(data: dict) -> None:
                     
                     # Небольшая задержка между сообщениями (rate limit)
                     await asyncio.sleep(0.1)
-                    
+
+                except RetryableAmoCRMError as e:
+                    retry_count = msg.get("_retry_count", 0)
+                    if retry_count >= _MAX_RETRY_ATTEMPTS:
+                        logger.error(
+                            "Salebot message dropped after %d retries (AmoCRM unavailable): %s",
+                            _MAX_RETRY_ATTEMPTS,
+                            e,
+                        )
+                        await redis.decr(counter_key)
+                        total_processed += 1
+                    else:
+                        msg["_retry_count"] = retry_count + 1
+                        await push_conversation_message(conversation_key, msg)
+                        logger.warning(
+                            "Salebot message requeued (attempt %d/%d) due to temporary AmoCRM error: %s",
+                            retry_count + 1,
+                            _MAX_RETRY_ATTEMPTS,
+                            e,
+                        )
+                        has_retries = True
+
                 except Exception as e:
                     logger.error(
                         "Error processing Salebot message in batch: %s",
@@ -279,6 +307,14 @@ async def process_salebot_message(data: dict) -> None:
                         new_counter,
                     )
                     total_processed += 1
+
+            if has_retries:
+                logger.info(
+                    "Waiting %ds before retrying requeued messages: %s",
+                    _RETRY_DELAY,
+                    conversation_key,
+                )
+                await asyncio.sleep(_RETRY_DELAY)
         
         logger.info(
             "Batch processing completed for conversation %s: %d total messages processed",
@@ -412,6 +448,7 @@ async def process_amojo_message(data: dict) -> None:
             )
             
             # Обрабатываем каждое сообщение по порядку (FIFO)
+            has_retries = False
             for msg in messages:
                 try:
                     await manager.handle_amojo_message(
@@ -438,7 +475,28 @@ async def process_amojo_message(data: dict) -> None:
                     
                     # Небольшая задержка между сообщениями (rate limit)
                     await asyncio.sleep(0.1)
-                    
+
+                except RetryableAmoCRMError as e:
+                    retry_count = msg.get("_retry_count", 0)
+                    if retry_count >= _MAX_RETRY_ATTEMPTS:
+                        logger.error(
+                            "Amojo message dropped after %d retries (AmoCRM unavailable): %s",
+                            _MAX_RETRY_ATTEMPTS,
+                            e,
+                        )
+                        await redis.decr(counter_key)
+                        total_processed += 1
+                    else:
+                        msg["_retry_count"] = retry_count + 1
+                        await push_conversation_message(conversation_id, msg)
+                        logger.warning(
+                            "Amojo message requeued (attempt %d/%d) due to temporary AmoCRM error: %s",
+                            retry_count + 1,
+                            _MAX_RETRY_ATTEMPTS,
+                            e,
+                        )
+                        has_retries = True
+
                 except Exception as e:
                     logger.error(
                         "Error processing Amojo message in batch: %s",
@@ -456,6 +514,14 @@ async def process_amojo_message(data: dict) -> None:
                         new_counter,
                     )
                     total_processed += 1
+
+            if has_retries:
+                logger.info(
+                    "Waiting %ds before retrying requeued messages: %s",
+                    _RETRY_DELAY,
+                    conversation_id,
+                )
+                await asyncio.sleep(_RETRY_DELAY)
         
         logger.info(
             "Batch processing completed for conversation %s: %d total messages processed",

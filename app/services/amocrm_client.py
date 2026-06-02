@@ -17,6 +17,11 @@ from app.utils.token_manager import get_token_manager
 logger = logging.getLogger(__name__)
 
 
+class RetryableAmoCRMError(aiohttp.ClientError):
+    """Временная ошибка AmoCRM (502/503/504) — запрос можно повторить позже."""
+    pass
+
+
 class AmoCRMClient:
     """
     Асинхронный клиент для AmoCRM API v4.
@@ -173,6 +178,11 @@ class AmoCRMClient:
             logger.warning("AmoCRM rate limit exceeded (429)")
             await asyncio.sleep(1)
             raise aiohttp.ClientError("Rate limit exceeded")
+
+        if response.status in (502, 503, 504):
+            text = await response.text()
+            logger.error("AmoCRM temporary error %s (retryable): %s", response.status, text[:200])
+            raise RetryableAmoCRMError(f"API error {response.status}: {text[:200]}")
 
         if response.status >= 400:
             text = await response.text()
@@ -631,6 +641,26 @@ class AmoCRMClient:
         except Exception as e:
             logger.error("Error creating lead: %s", e)
             raise
+
+    async def move_lead(self, lead_id: int, pipeline_id: int, status_id: int) -> None:
+        """
+        Переместить сделку в другую воронку / этап.
+
+        Args:
+            lead_id: ID сделки
+            pipeline_id: ID целевой воронки
+            status_id: ID целевого этапа
+        """
+        logger.info("Moving lead %s to pipeline=%s, status=%s", lead_id, pipeline_id, status_id)
+        try:
+            await self._make_request(
+                "PATCH",
+                "/leads",
+                data=[{"id": lead_id, "pipeline_id": pipeline_id, "status_id": status_id}],
+            )
+            logger.info("Lead %s moved to pipeline=%s, status=%s", lead_id, pipeline_id, status_id)
+        except Exception as e:
+            logger.warning("Failed to move lead %s: %s", lead_id, e)
 
     async def update_lead_enum(self, lead_id: int, field_id: int, enum_id: int) -> None:
         """
