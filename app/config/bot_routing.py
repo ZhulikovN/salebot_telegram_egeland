@@ -24,6 +24,9 @@ class BotConfig:
     pipeline_id: int
     status_id: int
     lead_name: str
+    # Теги, которые ставятся на сделку при каждом создании новой беседы из этого бота.
+    # Формат: tuple[tag_id, ...].
+    default_tags: tuple[int, ...] = field(default=())
     # Маппинг: (lowercase-ключевое слово, tag_id в AmoCRM).
     # Если сообщение содержит ключевое слово — тег добавляется к сделке по ID.
     keywords: tuple[tuple[str, int], ...] = field(default=())
@@ -70,6 +73,7 @@ _BOT_CONFIGS: dict[str, BotConfig] = {
         pipeline_id=settings.AMOCRM_PIPELINE_ID_IG_MIKHAIL,
         status_id=settings.AMOCRM_STATUS_ID_IG_MIKHAIL,
         lead_name="Заявка: IG - mikhail_matematik",
+        default_tags=(681886,),  # тег "instagram"
         keywords=(
             ("диагностика", 916729),
             ("курс", 737540),

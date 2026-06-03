@@ -304,6 +304,11 @@ class ConversationManager:
                 variables={"amo_lead_id": str(lead_id)},
             )
 
+            # Ставим default_tags на сделку (теги, заданные в конфиге бота)
+            if bot_config.default_tags:
+                for tag_id in bot_config.default_tags:
+                    await self.amocrm.add_lead_tag(lead_id, tag_id)
+
             # 3. Создать чат в amojo
             # conversation_id — наш идентификатор, с ним же отправляем сообщения
             amojo_conversation_id = str(uuid4())
