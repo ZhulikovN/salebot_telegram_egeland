@@ -297,6 +297,13 @@ class ConversationManager:
                 )
                 logger.info("New lead created: lead_id=%s", lead_id)
 
+            # Сохраняем lead_id в переменную amo_lead_id в профиле клиента Salebot
+            # чтобы коллега мог подставить #{amo_lead_id} в ссылку на оплату
+            await self.salebot.save_variables(
+                client_id=salebot_client_id,
+                variables={"amo_lead_id": str(lead_id)},
+            )
+
             # 3. Создать чат в amojo
             # conversation_id — наш идентификатор, с ним же отправляем сообщения
             amojo_conversation_id = str(uuid4())

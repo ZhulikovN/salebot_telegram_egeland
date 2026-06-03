@@ -233,6 +233,49 @@ class SalebotClient:
             logger.error("Error loading Salebot client: %s", e)
             raise
 
+    async def save_variables(
+        self,
+        client_id: int,
+        variables: dict[str, str],
+    ) -> None:
+        """
+        Сохранить переменные в профиль клиента Salebot.
+
+        POST https://chatter.salebot.pro/api/{API_KEY}/save_variables
+        Body: {"client_id": 12345, "variables": {"amo_lead_id": "40547727"}}
+
+        Best-effort: ошибки логируются как warning, не прерывают основной поток.
+
+        Args:
+            client_id: salebot_client_id (client.id из webhook, НЕ platform_id!)
+            variables: словарь переменных для сохранения
+        """
+        logger.info("Saving Salebot variables: client_id=%s, keys=%s", client_id, list(variables))
+
+        url = f"{self.base_url}/save_variables"
+        payload = {
+            "client_id": client_id,
+            "variables": variables,
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    url, json=payload, timeout=aiohttp.ClientTimeout(total=15)
+                ) as response:
+                    text = await response.text()
+
+                    if response.status >= 400:
+                        logger.warning(
+                            "Salebot save_variables error %s: %s", response.status, text
+                        )
+                        return
+
+                    logger.info("Salebot variables saved: %s", response.status)
+
+        except Exception as e:
+            logger.warning("Error saving Salebot variables (non-critical): %s", e)
+
     async def close(self) -> None:
         """Закрыть соединения (для совместимости, SalebotClient не держит постоянных соединений)."""
         pass
