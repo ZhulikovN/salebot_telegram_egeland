@@ -253,6 +253,11 @@ async def process_salebot_message(data: dict) -> None:
                             tg_username=msg.get("tg_username"),
                             utm_data=msg.get("utm_data"),
                         )
+                        if conversation_id is None:
+                            raise RuntimeError(
+                                f"handle_salebot_message returned None for platform_id={msg['platform_id']}, "
+                                f"bot={msg['bot_name']} — message not delivered"
+                            )
                         logger.debug(
                             "Salebot message processed: conversation_id=%s",
                             conversation_id,
