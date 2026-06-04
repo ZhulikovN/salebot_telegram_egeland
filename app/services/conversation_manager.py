@@ -4,9 +4,9 @@ import logging
 from uuid import uuid4
 
 from app.config.bot_routing import get_bot_config
-from app.db.storage import get_conversation_storage
+from app.db.storage import Conversation, get_conversation_storage
 from app.services.amocrm_client import AmoCRMClient
-from app.services.amojo_client import AmojoClient
+from app.services.amojo_client import AmojoClient, AmojoNotFoundError
 from app.services.salebot_client import SalebotClient
 from app.settings import settings
 from app.utils.redis_connection import get_redis
@@ -93,28 +93,44 @@ class ConversationManager:
                 "None" if lead is None else "dict",
             )
             if lead is None:
-                # 404 или API-ошибка: сделка слита, удалена или недоступна
+                # 404 или API-ошибка: сделка слита, удалена или недоступна.
+                # Переоткрываем диалог: создаём новую сделку, переиспользуем amojo-чат.
                 logger.info(
-                    "Lead %s not found (merged/deleted), resetting conversation for platform_id=%s, bot=%s",
+                    "Lead %s not found (merged/deleted), reopening conversation for platform_id=%s, bot=%s",
                     conversation.lead_id,
                     platform_id,
                     bot_name,
                 )
-                await self.storage.delete_by_platform_id(platform_id, bot_name)
-                conversation = None
+                conversation = await self._reopen_conversation(
+                    conversation=conversation,
+                    platform_id=platform_id,
+                    bot_name=bot_name,
+                    salebot_client_id=salebot_client_id,
+                    client_name=client_name,
+                    tg_username=tg_username,
+                    utm_data=utm_data,
+                )
             else:
                 closed_statuses = {settings.STATUS_SUCCESS, settings.STATUS_CLOSED}
                 lead_status = lead.get("status_id")
                 if lead_status is None or lead_status in closed_statuses:
+                    # Сделка закрыта: создаём новую сделку, переиспользуем amojo-чат.
                     logger.info(
-                        "Lead %s is closed (status=%s), resetting conversation for platform_id=%s, bot=%s",
+                        "Lead %s is closed (status=%s), reopening conversation for platform_id=%s, bot=%s",
                         conversation.lead_id,
                         lead_status,
                         platform_id,
                         bot_name,
                     )
-                    await self.storage.delete_by_platform_id(platform_id, bot_name)
-                    conversation = None
+                    conversation = await self._reopen_conversation(
+                        conversation=conversation,
+                        platform_id=platform_id,
+                        bot_name=bot_name,
+                        salebot_client_id=salebot_client_id,
+                        client_name=client_name,
+                        tg_username=tg_username,
+                        utm_data=utm_data,
+                    )
                 else:
                     current_lead = lead
 
@@ -158,30 +174,81 @@ class ConversationManager:
         is_first_message = conversation.messages_count == 0
         attachments = attachments or []
 
-        if message_text:
-            await self.amojo.send_incoming_message(
-                conversation_id=conversation.conversation_id,
-                msgid=f"salebot:{uuid4().hex}",
-                sender_id=f"tg:{platform_id}",
-                sender_name=client_name,
-                text=message_text,
-                silent=not is_first_message,
-            )
-            await self.storage.increment_message_count(conversation.conversation_id)
-            is_first_message = False
+        # Отправляем текст и вложения; при AmojoNotFoundError (чат удалён вручную в AmoCRM)
+        # выполняем fallback: пересоздаём чат и повторяем отправку.
+        try:
+            if message_text:
+                await self.amojo.send_incoming_message(
+                    conversation_id=conversation.conversation_id,
+                    msgid=f"salebot:{uuid4().hex}",
+                    sender_id=f"tg:{platform_id}",
+                    sender_name=client_name,
+                    text=message_text,
+                    silent=not is_first_message,
+                )
+                await self.storage.increment_message_count(conversation.conversation_id)
+                is_first_message = False
 
-        for media_url in attachments:
-            await self.amojo.send_incoming_message(
-                conversation_id=conversation.conversation_id,
-                msgid=f"salebot:{uuid4().hex}",
-                sender_id=f"tg:{platform_id}",
-                sender_name=client_name,
-                text="",
-                silent=not is_first_message,
-                media_url=media_url,
+            for media_url in attachments:
+                await self.amojo.send_incoming_message(
+                    conversation_id=conversation.conversation_id,
+                    msgid=f"salebot:{uuid4().hex}",
+                    sender_id=f"tg:{platform_id}",
+                    sender_name=client_name,
+                    text="",
+                    silent=not is_first_message,
+                    media_url=media_url,
+                )
+                await self.storage.increment_message_count(conversation.conversation_id)
+                is_first_message = False
+
+        except AmojoNotFoundError:
+            # Чат был удалён вручную в AmoCRM — пересоздаём и повторяем.
+            logger.warning(
+                "Amojo chat not found for conversation=%s, recreating (platform_id=%s, bot=%s)",
+                conversation.conversation_id,
+                platform_id,
+                bot_name,
             )
-            await self.storage.increment_message_count(conversation.conversation_id)
-            is_first_message = False
+            conversation = await self._recreate_amojo_chat(
+                conversation=conversation,
+                platform_id=platform_id,
+                bot_name=bot_name,
+                client_name=client_name,
+                tg_username=tg_username,
+            )
+            if not conversation:
+                raise RuntimeError(
+                    f"Failed to recreate amojo chat for platform_id={platform_id}, bot={bot_name} "
+                    f"— message not delivered"
+                )
+
+            is_first_message = conversation.messages_count == 0
+
+            if message_text:
+                await self.amojo.send_incoming_message(
+                    conversation_id=conversation.conversation_id,
+                    msgid=f"salebot:{uuid4().hex}",
+                    sender_id=f"tg:{platform_id}",
+                    sender_name=client_name,
+                    text=message_text,
+                    silent=not is_first_message,
+                )
+                await self.storage.increment_message_count(conversation.conversation_id)
+                is_first_message = False
+
+            for media_url in attachments:
+                await self.amojo.send_incoming_message(
+                    conversation_id=conversation.conversation_id,
+                    msgid=f"salebot:{uuid4().hex}",
+                    sender_id=f"tg:{platform_id}",
+                    sender_name=client_name,
+                    text="",
+                    silent=not is_first_message,
+                    media_url=media_url,
+                )
+                await self.storage.increment_message_count(conversation.conversation_id)
+                is_first_message = False
 
         if not message_text and not attachments:
             logger.warning(
@@ -352,6 +419,156 @@ class ConversationManager:
             logger.error(
                 "Error creating new conversation for platform_id=%s: %s",
                 platform_id,
+                e,
+                exc_info=True,
+            )
+            return None
+
+    async def _reopen_conversation(
+        self,
+        conversation: Conversation,
+        platform_id: str,
+        bot_name: str,
+        salebot_client_id: int,
+        client_name: str,
+        tg_username: str | None,
+        utm_data: dict | None,
+    ) -> Conversation | None:
+        """
+        Переоткрыть диалог при закрытой/удалённой сделке.
+
+        Создаёт новую сделку в amoCRM, но оставляет тот же amojo-чат —
+        клиент продолжает писать в тот же чат без потери истории.
+
+        Args:
+            conversation: Существующая запись диалога из БД
+            platform_id: Telegram ID клиента
+            bot_name: Название бота
+            salebot_client_id: client.id из Salebot
+            client_name: Имя клиента
+            tg_username: Telegram username (без @)
+            utm_data: UTM-метки из Salebot
+
+        Returns:
+            Обновлённая запись Conversation или None при ошибке
+        """
+        try:
+            bot_config = get_bot_config(bot_name)
+
+            # Используем уже известный contact_id — контакт не удаляется при закрытии сделки
+            contact_id = conversation.contact_id
+
+            duplicate_lead = await self.amocrm.check_duplicate_lead(
+                contact_id=contact_id,
+                pipeline_id=bot_config.pipeline_id,
+            )
+
+            if duplicate_lead:
+                lead_id = duplicate_lead["id"]
+                logger.info(
+                    "Duplicate lead found on reopen (pipeline=%s): lead_id=%s",
+                    bot_config.pipeline_id,
+                    lead_id,
+                )
+                if utm_data:
+                    await self._update_lead_utm_first_touch(lead_id, utm_data)
+            else:
+                lead_id = await self.amocrm.create_lead(
+                    contact_id=contact_id,
+                    bot_name=bot_name,
+                    pipeline_id=bot_config.pipeline_id,
+                    status_id=bot_config.status_id,
+                    lead_name=bot_config.lead_name or None,
+                    utm_data=utm_data,
+                )
+                logger.info("New lead created on reopen: lead_id=%s", lead_id)
+
+            await self.salebot.save_variables(
+                client_id=salebot_client_id,
+                variables={"amo_lead_id": str(lead_id)},
+            )
+
+            if bot_config.default_tags:
+                for tag_id in bot_config.default_tags:
+                    await self.amocrm.add_lead_tag(lead_id, tag_id)
+
+            # Обновляем lead_id в БД и сбрасываем messages_count
+            await self.storage.update_lead_id(platform_id, bot_name, lead_id)
+            logger.info(
+                "Conversation reopened (reused amojo chat): platform_id=%s, bot=%s, new_lead_id=%s, conversation_id=%s",
+                platform_id,
+                bot_name,
+                lead_id,
+                conversation.conversation_id,
+            )
+
+            return await self.storage.get_by_platform_id(platform_id, bot_name)
+
+        except Exception as e:
+            logger.error(
+                "Error reopening conversation for platform_id=%s, bot=%s: %s",
+                platform_id,
+                bot_name,
+                e,
+                exc_info=True,
+            )
+            return None
+
+    async def _recreate_amojo_chat(
+        self,
+        conversation: Conversation,
+        platform_id: str,
+        bot_name: str,
+        client_name: str,
+        tg_username: str | None,
+    ) -> Conversation | None:
+        """
+        Fallback: пересоздать amojo-чат когда он был удалён вручную в AmoCRM.
+
+        Создаёт новый чат, привязывает к контакту, обновляет conversation_id в БД.
+
+        Args:
+            conversation: Текущая запись диалога (с устаревшим conversation_id)
+            platform_id: Telegram ID клиента
+            bot_name: Название бота
+            client_name: Имя клиента
+            tg_username: Telegram username (без @)
+
+        Returns:
+            Обновлённая запись Conversation или None при ошибке
+        """
+        try:
+            new_conversation_id = str(uuid4())
+            profile_link = f"https://t.me/{tg_username}" if tg_username else None
+
+            chat_id = await self.amocrm.create_chat_in_amojo(
+                conversation_id=new_conversation_id,
+                user_id=f"tg:{platform_id}",
+                user_name=client_name,
+                profile_link=profile_link,
+            )
+
+            await self.amocrm.link_chat_to_contact(
+                contact_id=conversation.contact_id,
+                chat_id=chat_id,
+            )
+
+            await self.storage.update_conversation_id(platform_id, bot_name, new_conversation_id)
+            logger.info(
+                "Amojo chat recreated (fallback): platform_id=%s, bot=%s, old_conversation_id=%s, new_conversation_id=%s",
+                platform_id,
+                bot_name,
+                conversation.conversation_id,
+                new_conversation_id,
+            )
+
+            return await self.storage.get_by_platform_id(platform_id, bot_name)
+
+        except Exception as e:
+            logger.error(
+                "Error recreating amojo chat for platform_id=%s, bot=%s: %s",
+                platform_id,
+                bot_name,
                 e,
                 exc_info=True,
             )
