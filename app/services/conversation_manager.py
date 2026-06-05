@@ -90,14 +90,17 @@ class ConversationManager:
                 "get_lead(%s) returned: status_id=%s, lead=%s",
                 conversation.lead_id,
                 lead.get("status_id") if lead else None,
-                "None" if lead is None else "dict",
+                "None" if lead is None else "absorbed(204)" if lead == {} else "dict",
             )
-            if lead is None:
-                # 404 или API-ошибка: сделка слита, удалена или недоступна.
-                # Переоткрываем диалог: создаём новую сделку, переиспользуем amojo-чат.
+            if lead is None or lead == {}:
+                # None  → 404 / API-ошибка: сделка удалена или недоступна.
+                # {} → 204: сделка поглощена через NOVA merge.
+                # В обоих случаях переоткрываем диалог.
+                reason = "absorbed (204)" if lead == {} else "not found (404/error)"
                 logger.info(
-                    "Lead %s not found (merged/deleted), reopening conversation for platform_id=%s, bot=%s",
+                    "Lead %s %s, reopening conversation for platform_id=%s, bot=%s",
                     conversation.lead_id,
+                    reason,
                     platform_id,
                     bot_name,
                 )
@@ -113,7 +116,7 @@ class ConversationManager:
             else:
                 closed_statuses = {settings.STATUS_SUCCESS, settings.STATUS_CLOSED}
                 lead_status = lead.get("status_id")
-                if lead_status is None or lead_status in closed_statuses:
+                if lead_status is not None and lead_status in closed_statuses:
                     # Сделка закрыта: создаём новую сделку, переиспользуем amojo-чат.
                     logger.info(
                         "Lead %s is closed (status=%s), reopening conversation for platform_id=%s, bot=%s",
@@ -132,6 +135,9 @@ class ConversationManager:
                         utm_data=utm_data,
                     )
                 else:
+                    # status_id=None — переходное состояние AmoCRM (слияние контактов/сделок
+                    # через NOVA или другой виджет). Сделка физически существует, считаем
+                    # её открытой и доставляем сообщение без создания дубля.
                     current_lead = lead
 
         if not conversation:
@@ -455,8 +461,37 @@ class ConversationManager:
         try:
             bot_config = get_bot_config(bot_name)
 
-            # Используем уже известный contact_id — контакт не удаляется при закрытии сделки
+            # Проверяем жив ли контакт из БД.
+            # Если AmoCRM вернул {} (204) — контакт поглощён NOVA.
+            # В этом случае ищем выжившего по platform_id чтобы не создавать
+            # сделку с мёртвым контактом (что даёт пустую сделку без привязки).
             contact_id = conversation.contact_id
+            logger.info(
+                "Reopen: checking contact liveness: contact_id=%s, platform_id=%s, bot=%s",
+                contact_id,
+                platform_id,
+                bot_name,
+            )
+            contact_data = await self.amocrm.get_contact(contact_id)
+
+            if contact_data == {}:
+                # Контакт поглощён (204) — ищем актуального
+                fresh_contact_id = await self._find_or_create_contact(
+                    platform_id=platform_id,
+                    client_name=client_name,
+                    tg_username=tg_username,
+                    platform_id_field=bot_config.platform_id_field,
+                )
+                logger.info(
+                    "Reopen: contact %s absorbed (204), resolved to %s (platform_id=%s, db_updated=%s)",
+                    contact_id,
+                    fresh_contact_id,
+                    platform_id,
+                    fresh_contact_id != contact_id,
+                )
+                if fresh_contact_id != contact_id:
+                    await self.storage.update_contact_id(platform_id, bot_name, fresh_contact_id)
+                contact_id = fresh_contact_id
 
             duplicate_lead = await self.amocrm.check_duplicate_lead(
                 contact_id=contact_id,

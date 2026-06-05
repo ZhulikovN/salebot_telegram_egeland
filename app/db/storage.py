@@ -299,6 +299,44 @@ class ConversationStorage:
             )
             return True
 
+    async def update_contact_id(
+        self, platform_id: str, bot_name: str, new_contact_id: int
+    ) -> bool:
+        """
+        Обновить contact_id диалога.
+
+        Вызывается когда контакт был поглощён через NOVA merge и найден новый
+        выживший контакт по platform_id.
+
+        Args:
+            platform_id: Telegram ID клиента
+            bot_name: Название бота
+            new_contact_id: ID нового (выжившего) контакта в amoCRM
+
+        Returns:
+            True если обновлено, False если запись не найдена
+        """
+        async with self.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(Conversation).where(
+                    Conversation.platform_id == platform_id,
+                    Conversation.bot_name == bot_name,
+                )
+            )
+            conversation = result.scalars().first()
+            if not conversation:
+                return False
+            conversation.contact_id = new_contact_id
+            conversation.updated_at = datetime.now()
+            await session.commit()
+            logger.info(
+                "Conversation contact_id updated: platform_id=%s, bot_name=%s, new_contact_id=%s",
+                platform_id,
+                bot_name,
+                new_contact_id,
+            )
+            return True
+
     async def update_conversation_id(
         self, platform_id: str, bot_name: str, new_conversation_id: str
     ) -> bool:

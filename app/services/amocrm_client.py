@@ -452,6 +452,20 @@ class AmoCRMClient:
             logger.error("Error updating contact: %s", e)
             raise
 
+    async def get_contact(self, contact_id: int) -> dict[str, Any] | None:
+        """
+        Получить контакт по ID.
+
+        Returns:
+            Данные контакта, {} если 204 (поглощён через merge), None при ошибке/404
+        """
+        logger.debug("Fetching contact: %s", contact_id)
+        try:
+            return await self._make_request("GET", f"/contacts/{contact_id}", retry=1)
+        except Exception as e:
+            logger.warning("Contact %s not found or error: %s", contact_id, e)
+            return None
+
     async def get_lead(self, lead_id: int) -> dict[str, Any] | None:
         """
         Получить сделку по ID.
