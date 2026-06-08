@@ -452,6 +452,20 @@ class AmoCRMClient:
             logger.error("Error updating contact: %s", e)
             raise
 
+    async def get_contact(self, contact_id: int) -> dict[str, Any] | None:
+        """
+        Получить контакт по ID.
+
+        Returns:
+            Данные контакта, {} если 204 (поглощён через merge), None при ошибке/404
+        """
+        logger.debug("Fetching contact: %s", contact_id)
+        try:
+            return await self._make_request("GET", f"/contacts/{contact_id}", retry=1)
+        except Exception as e:
+            logger.warning("Contact %s not found or error: %s", contact_id, e)
+            return None
+
     async def get_lead(self, lead_id: int) -> dict[str, Any] | None:
         """
         Получить сделку по ID.
@@ -475,24 +489,24 @@ class AmoCRMClient:
         pipeline_id: int | None = None,
     ) -> dict[str, Any] | None:
         """
-        Найти открытую сделку контакта в указанной воронке.
+        Найти открытую сделку контакта.
 
         Логика по ТЗ (п. 6.2–6.3):
-        - Дубль только если сделка принадлежит контакту И в той же воронке И открытая
-        - Сделка в другой воронке — НЕ дубль
+        - Дубль только если сделка принадлежит контакту И открытая
+        - Если pipeline_id передан — ищем только в этой воронке
+        - Если pipeline_id не передан — ищем по всем воронкам (сценарий после слияния контактов NOVA)
 
         Args:
             contact_id: ID контакта
-            pipeline_id: ID воронки для проверки (по умолчанию из settings)
+            pipeline_id: ID воронки для проверки. Если None — поиск по всем воронкам.
 
         Returns:
             Данные открытой сделки-дубля или None
         """
-        pipeline_id = pipeline_id or settings.AMOCRM_PIPELINE_ID
         logger.info(
             "Searching for duplicate lead: contact=%s, pipeline=%s",
             contact_id,
-            pipeline_id,
+            pipeline_id if pipeline_id is not None else "all",
         )
 
         try:
@@ -527,9 +541,9 @@ class AmoCRMClient:
                     )
                     continue
 
-                # Проверяем воронку — дубль только в той же воронке
+                # Проверяем воронку — только если pipeline_id задан явно
                 lead_pipeline_id = lead.get("pipeline_id")
-                if lead_pipeline_id != pipeline_id:
+                if pipeline_id is not None and lead_pipeline_id != pipeline_id:
                     logger.debug(
                         "Lead %s is in different pipeline %s (need %s), skipping",
                         lead["id"],
@@ -557,7 +571,7 @@ class AmoCRMClient:
             logger.info(
                 "No duplicate lead found for contact %s in pipeline %s",
                 contact_id,
-                pipeline_id,
+                pipeline_id if pipeline_id is not None else "all",
             )
             return None
 

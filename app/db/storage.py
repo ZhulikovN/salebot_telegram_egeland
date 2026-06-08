@@ -260,6 +260,121 @@ class ConversationStorage:
             )
             return True
 
+    async def update_lead_id(
+        self, platform_id: str, bot_name: str, new_lead_id: int
+    ) -> bool:
+        """
+        Обновить lead_id диалога и сбросить messages_count.
+
+        Вызывается когда клиент пишет после закрытия сделки —
+        создаём новую сделку, но переиспользуем существующий amojo-чат.
+
+        Args:
+            platform_id: Telegram ID клиента
+            bot_name: Название бота
+            new_lead_id: ID новой сделки в amoCRM
+
+        Returns:
+            True если обновлено, False если запись не найдена
+        """
+        async with self.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(Conversation).where(
+                    Conversation.platform_id == platform_id,
+                    Conversation.bot_name == bot_name,
+                )
+            )
+            conversation = result.scalars().first()
+            if not conversation:
+                return False
+            conversation.lead_id = new_lead_id
+            conversation.messages_count = 0
+            conversation.updated_at = datetime.now()
+            await session.commit()
+            logger.info(
+                "Conversation lead_id updated: platform_id=%s, bot_name=%s, new_lead_id=%s",
+                platform_id,
+                bot_name,
+                new_lead_id,
+            )
+            return True
+
+    async def update_contact_id(
+        self, platform_id: str, bot_name: str, new_contact_id: int
+    ) -> bool:
+        """
+        Обновить contact_id диалога.
+
+        Вызывается когда контакт был поглощён через NOVA merge и найден новый
+        выживший контакт по platform_id.
+
+        Args:
+            platform_id: Telegram ID клиента
+            bot_name: Название бота
+            new_contact_id: ID нового (выжившего) контакта в amoCRM
+
+        Returns:
+            True если обновлено, False если запись не найдена
+        """
+        async with self.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(Conversation).where(
+                    Conversation.platform_id == platform_id,
+                    Conversation.bot_name == bot_name,
+                )
+            )
+            conversation = result.scalars().first()
+            if not conversation:
+                return False
+            conversation.contact_id = new_contact_id
+            conversation.updated_at = datetime.now()
+            await session.commit()
+            logger.info(
+                "Conversation contact_id updated: platform_id=%s, bot_name=%s, new_contact_id=%s",
+                platform_id,
+                bot_name,
+                new_contact_id,
+            )
+            return True
+
+    async def update_conversation_id(
+        self, platform_id: str, bot_name: str, new_conversation_id: str
+    ) -> bool:
+        """
+        Обновить conversation_id диалога.
+
+        Вызывается как fallback когда amojo-чат был удалён вручную
+        и пришлось создать новый.
+
+        Args:
+            platform_id: Telegram ID клиента
+            bot_name: Название бота
+            new_conversation_id: UUID нового чата в amojo
+
+        Returns:
+            True если обновлено, False если запись не найдена
+        """
+        async with self.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(Conversation).where(
+                    Conversation.platform_id == platform_id,
+                    Conversation.bot_name == bot_name,
+                )
+            )
+            conversation = result.scalars().first()
+            if not conversation:
+                return False
+            conversation.conversation_id = new_conversation_id
+            conversation.updated_at = datetime.now()
+            await session.commit()
+            logger.info(
+                "Conversation conversation_id updated: platform_id=%s, bot_name=%s, new_conversation_id=%s",
+                platform_id,
+                bot_name,
+                new_conversation_id,
+            )
+            return True
+
     async def close(self) -> None:
         """Закрыть все соединения с БД."""
         await self.engine.dispose()

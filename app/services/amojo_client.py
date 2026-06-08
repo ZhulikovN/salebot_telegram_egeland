@@ -13,6 +13,12 @@ from app.settings import settings
 
 logger = logging.getLogger(__name__)
 
+
+class AmojoNotFoundError(aiohttp.ClientError):
+    """Чат не найден в amojo (4xx) — чат был удалён вручную в AmoCRM."""
+    pass
+
+
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 VOICE_EXTENSIONS = {".oga", ".ogg", ".mp3", ".m4a", ".wav", ".aac"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
@@ -194,7 +200,12 @@ class AmojoClient:
                 async with session.post(
                     url, data=body_json.encode("utf-8"), headers=headers, timeout=aiohttp.ClientTimeout(total=30)
                 ) as response:
-                    if response.status >= 400:
+                    if 400 <= response.status < 500:
+                        text = await response.text()
+                        logger.error("Amojo API error %s: %s", response.status, text)
+                        raise AmojoNotFoundError(f"Amojo API error {response.status}: {text}")
+
+                    if response.status >= 500:
                         text = await response.text()
                         logger.error("Amojo API error %s: %s", response.status, text)
                         raise aiohttp.ClientError(f"Amojo API error {response.status}: {text}")
