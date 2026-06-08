@@ -466,6 +466,7 @@ class ConversationManager:
             # В этом случае ищем выжившего по platform_id чтобы не создавать
             # сделку с мёртвым контактом (что даёт пустую сделку без привязки).
             contact_id = conversation.contact_id
+            contact_absorbed = False
             logger.info(
                 "Reopen: checking contact liveness: contact_id=%s, platform_id=%s, bot=%s",
                 contact_id,
@@ -476,6 +477,7 @@ class ConversationManager:
 
             if contact_data == {}:
                 # Контакт поглощён (204) — ищем актуального
+                contact_absorbed = True
                 fresh_contact_id = await self._find_or_create_contact(
                     platform_id=platform_id,
                     client_name=client_name,
@@ -493,9 +495,12 @@ class ConversationManager:
                     await self.storage.update_contact_id(platform_id, bot_name, fresh_contact_id)
                 contact_id = fresh_contact_id
 
+            # После слияния контактов выживший может иметь открытую сделку в любой воронке —
+            # ищем по всем воронкам чтобы не создавать дубль.
+            # В штатном сценарии (контакт живой) ищем только в воронке бота.
             duplicate_lead = await self.amocrm.check_duplicate_lead(
                 contact_id=contact_id,
-                pipeline_id=bot_config.pipeline_id,
+                pipeline_id=None if contact_absorbed else bot_config.pipeline_id,
             )
 
             if duplicate_lead:
