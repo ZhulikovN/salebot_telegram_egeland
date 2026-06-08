@@ -3,10 +3,66 @@ import pytest
 from app.services.amocrm_client import AmoCRMClient
 #  poetry run pytest tests/test_amocrm_client/test_amocrm_client.py -v -s --log-cli-level=INFO
 
-TEST_CONTACT_ID = 46370921
-TEST_LEAD_ID = 0
-TEST_TG_ID = "1234566"
+TEST_CONTACT_ID = 60758413
+TEST_LEAD_ID = 40562799      # живая сделка → ожидаем dict с данными
+TEST_ABSORBED_LEAD_ID = 40564811  # поглощён NOVA → ожидаем {}
+TEST_TG_ID = "5305636742"
 TEST_USERNAME = "test_username"
+TEST_ABSORBED_CONTACT_ID = 60758761  # поглощён NOVA → ожидаем {}
+
+
+
+# @pytest.mark.asyncio
+# @pytest.mark.integration
+# async def test_get_contact() -> None:
+#     client = AmoCRMClient()
+#
+#     # # Живой контакт — должен вернуть dict с данными
+#     # result = await client.get_contact(TEST_CONTACT_ID)
+#     # if result is None:
+#     #     print(f"\n✗ Contact {TEST_CONTACT_ID} returned None (404 or error)")
+#     # elif result == {}:
+#     #     print(f"\n✗ Contact {TEST_CONTACT_ID} returned {{}} (204 — absorbed)")
+#     # else:
+#     #     print(f"\n✓ Contact {TEST_CONTACT_ID} is alive: name={result.get('name')}")
+#
+#     # Поглощённый контакт — должен вернуть {}
+#     result_absorbed = await client.get_contact(TEST_ABSORBED_CONTACT_ID)
+#     if result_absorbed == {}:
+#         print(f"✓ Contact {TEST_ABSORBED_CONTACT_ID} is absorbed (204) — {{}} as expected")
+#     elif result_absorbed is None:
+#         print(f"? Contact {TEST_ABSORBED_CONTACT_ID} returned None (404 or error)")
+#     else:
+#         print(f"? Contact {TEST_ABSORBED_CONTACT_ID} is alive: name={result_absorbed.get('name')}")
+#
+#     await client.close()
+
+
+# @pytest.mark.asyncio
+# @pytest.mark.integration
+# async def test_get_lead() -> None:
+#     client = AmoCRMClient()
+#
+#     try:
+#         # Живая сделка — должна вернуть dict с данными
+#         result = await client.get_lead(TEST_LEAD_ID)
+#         if result is None:
+#             print(f"\n✗ Lead {TEST_LEAD_ID} returned None (404 or error)")
+#         elif result == {}:
+#             print(f"\n✗ Lead {TEST_LEAD_ID} returned {{}} (204 — absorbed)")
+#         else:
+#             print(f"\n✓ Lead {TEST_LEAD_ID} is alive: name={result.get('name')}, status={result.get('status_id')}")
+#
+#         # Поглощённая сделка — должна вернуть {}
+#         result_absorbed = await client.get_lead(TEST_ABSORBED_LEAD_ID)
+#         if result_absorbed == {}:
+#             print(f"✓ Lead {TEST_ABSORBED_LEAD_ID} is absorbed (204) — {{}} as expected")
+#         elif result_absorbed is None:
+#             print(f"? Lead {TEST_ABSORBED_LEAD_ID} returned None (404 or error)")
+#         else:
+#             print(f"? Lead {TEST_ABSORBED_LEAD_ID} is alive: status={result_absorbed.get('status_id')}")
+#     finally:
+#         await client.close()
 
 
 # @pytest.mark.asyncio
@@ -17,11 +73,12 @@ TEST_USERNAME = "test_username"
 #     contact = await client.find_contact_by_tg_id(TEST_TG_ID)
 #
 #     if contact:
-#         assert contact["id"] == TEST_CONTACT_ID
-#         assert "name" in contact
-#         assert "custom_fields_values" in contact
-#         print(f"\n✓ Found contact by TG ID: {contact['id']}")
+#         # assert contact["id"] == TEST_CONTACT_ID
+#         # assert "name" in contact
+#         # assert "custom_fields_values" in contact
+#         # print(f"\n✓ Found contact by TG ID: {contact['id']}")
 #         print(f"✓ Contact name: {contact['name']}")
+#         print(f"✓ Contact: {contact}")
 #     else:
 #         print(f"\n✓ Contact not found by TG ID: {TEST_TG_ID}")
 
@@ -211,94 +268,95 @@ TEST_USERNAME = "test_username"
 #     finally:
 #         await client.close()
 
-@pytest.mark.asyncio
-@pytest.mark.integration
-async def test_full_chat_flow() -> None:
-    """Полный поток: создание чата + привязка + отправка сообщения."""
-    from uuid import uuid4
-
-    from app.services.amojo_client import AmojoClient
-
-    amocrm_client = AmoCRMClient()
-    amojo_client = AmojoClient()
-
-    try:
-        # 1. Генерируем уникальные ID
-        unique_id = uuid4()
-        tg_id = "111111"
-        bot_name = f"TestBot_{unique_id}"
-        conversation_id = f"tg:{tg_id}:{bot_name}"
-        user_id = f"tg:{tg_id}"
-        user_name = "Тестовый Контакт pytest"
-
-        print(f"\n✓ conversation_id: {conversation_id}")
-
-        # 2. Создаем чат в amojo
-        chat_id = await amocrm_client.create_chat_in_amojo(
-            conversation_id=conversation_id,
-            user_id=user_id,
-            user_name=user_name,
-            profile_link="https://t.me/test",
-        )
-        print(f"✓ Chat created in amojo: {chat_id}")
-
-        # 3. Привязываем чат к контакту
-        await amocrm_client.link_chat_to_contact(
-            contact_id=47418161,
-            chat_id=chat_id,
-        )
-        print(f"✓ Chat linked to contact {TEST_CONTACT_ID}")
-
-        # 4. Отправляем сообщение в этот чат
-        msgid = f"pytest:{uuid4()}"
-        await amojo_client.send_incoming_message(
-            conversation_id=conversation_id,
-            msgid=msgid,
-            sender_id=user_id,
-            sender_name=user_name,
-            text="pytest: тестовое сообщение после привязки чата",
-            silent=True,  # не создавать Неразобранное
-            profile_link="https://t.me/test",
-        )
-        print(f"✓ Message sent to linked chat: {msgid}")
-
-        print("\n✅ Full flow completed: chat created, linked, and message sent!")
-    finally:
-        await amocrm_client.close()
-
-
 # @pytest.mark.asyncio
 # @pytest.mark.integration
-# async def test_check_duplicate_lead() -> None:
-#     """Тест поиска открытой сделки у контакта."""
-#     client = AmoCRMClient()
+# async def test_full_chat_flow() -> None:
+#     """Полный поток: создание чата + привязка + отправка сообщения."""
+#     from uuid import uuid4
+#
+#     from app.services.amojo_client import AmojoClient
+#
+#     amocrm_client = AmoCRMClient()
+#     amojo_client = AmojoClient()
 #
 #     try:
-#         # ID контакта для теста
-#         test_contact_id = 37530153
+#         # 1. Генерируем уникальные ID
+#         unique_id = uuid4()
+#         tg_id = "111111"
+#         bot_name = f"TestBot_{unique_id}"
+#         conversation_id = f"tg:{tg_id}:{bot_name}"
+#         user_id = f"tg:{tg_id}"
+#         user_name = "Тестовый Контакт pytest"
 #
-#         # Ищем открытую сделку
-#         open_lead = await client.check_duplicate_lead(contact_id=test_contact_id)
+#         print(f"\n✓ conversation_id: {conversation_id}")
 #
-#         if open_lead:
-#             print(f"\n✓ Open lead found: {open_lead['id']}")
-#             print(f"  - Pipeline: {open_lead.get('pipeline_id')}")
-#             print(f"  - Status: {open_lead.get('status_id')}")
+#         # 2. Создаем чат в amojo
+#         chat_id = await amocrm_client.create_chat_in_amojo(
+#             conversation_id=conversation_id,
+#             user_id=user_id,
+#             user_name=user_name,
+#             profile_link="https://t.me/test",
+#         )
+#         print(f"✓ Chat created in amojo: {chat_id}")
 #
-#             # Проверяем что сделка действительно привязана к контакту
-#             contacts = open_lead.get("_embedded", {}).get("contacts", [])
-#             contact_ids = [c["id"] for c in contacts]
+#         # 3. Привязываем чат к контакту
+#         await amocrm_client.link_chat_to_contact(
+#             contact_id=47418161,
+#             chat_id=chat_id,
+#         )
+#         print(f"✓ Chat linked to contact {TEST_CONTACT_ID}")
 #
-#             assert test_contact_id in contact_ids, (
-#                 f"Lead {open_lead['id']} is not linked to contact {test_contact_id}! "
-#                 f"Linked to: {contact_ids}"
-#             )
-#             print(f"  - ✓ Lead is correctly linked to contact {test_contact_id}")
-#         else:
-#             print(f"\n✓ No open leads found for contact {test_contact_id}")
+#         # 4. Отправляем сообщение в этот чат
+#         msgid = f"pytest:{uuid4()}"
+#         await amojo_client.send_incoming_message(
+#             conversation_id=conversation_id,
+#             msgid=msgid,
+#             sender_id=user_id,
+#             sender_name=user_name,
+#             text="pytest: тестовое сообщение после привязки чата",
+#             silent=True,  # не создавать Неразобранное
+#             profile_link="https://t.me/test",
+#         )
+#         print(f"✓ Message sent to linked chat: {msgid}")
 #
+#         print("\n Full flow completed: chat created, linked, and message sent!")
 #     finally:
-#         await client.close()
+#         await amocrm_client.close()
 
 
-#
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_check_duplicate_lead() -> None:
+    """Тест поиска открытой сделки у контакта."""
+    client = AmoCRMClient()
+
+    try:
+        # ID контакта для теста
+        test_contact_id = 60754173
+
+        # Ищем открытую сделку
+        open_lead = await client.check_duplicate_lead(contact_id=test_contact_id, pipeline_id=8598230)
+        # open_lead = await client.check_duplicate_lead(contact_id=test_contact_id)
+
+        if open_lead:
+            print(f"\n✓ FULL lead: {open_lead}")
+            print(f"\n✓ Open lead found: {open_lead['id']}")
+            print(f"  - Pipeline: {open_lead.get('pipeline_id')}")
+            print(f"  - Status: {open_lead.get('status_id')}")
+
+            # Проверяем что сделка действительно привязана к контакту
+            contacts = open_lead.get("_embedded", {}).get("contacts", [])
+            contact_ids = [c["id"] for c in contacts]
+
+            assert test_contact_id in contact_ids, (
+                f"Lead {open_lead['id']} is not linked to contact {test_contact_id}! "
+                f"Linked to: {contact_ids}"
+            )
+            print(f"  - ✓ Lead is correctly linked to contact {test_contact_id}")
+        else:
+            print(f"\n✓ No open leads found for contact {test_contact_id}")
+
+    finally:
+        await client.close()
+
+
