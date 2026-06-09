@@ -495,6 +495,29 @@ class ConversationManager:
                     await self.storage.update_contact_id(platform_id, bot_name, fresh_contact_id)
                 contact_id = fresh_contact_id
 
+                # Контакт сменился — старый amojo-чат привязан к поглощённому контакту.
+                # Создаём новый чат и привязываем к актуальному контакту,
+                # иначе сообщения продолжат уходить в сделку старого контакта.
+                new_conversation_id = str(uuid4())
+                profile_link = f"https://t.me/{tg_username}" if tg_username else None
+                chat_id = await self.amocrm.create_chat_in_amojo(
+                    conversation_id=new_conversation_id,
+                    user_id=f"tg:{platform_id}",
+                    user_name=client_name,
+                    profile_link=profile_link,
+                )
+                await self.amocrm.link_chat_to_contact(
+                    contact_id=contact_id,
+                    chat_id=chat_id,
+                )
+                await self.storage.update_conversation_id(platform_id, bot_name, new_conversation_id)
+                logger.info(
+                    "Reopen: contact absorbed — new amojo chat created: old_conv=%s, new_conv=%s, contact=%s",
+                    conversation.conversation_id,
+                    new_conversation_id,
+                    contact_id,
+                )
+
             # После слияния контактов выживший может иметь открытую сделку в любой воронке —
             # ищем по всем воронкам чтобы не создавать дубль.
             # В штатном сценарии (контакт живой) ищем только в воронке бота.
