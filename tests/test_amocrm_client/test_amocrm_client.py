@@ -332,11 +332,11 @@ async def test_check_duplicate_lead() -> None:
 
     try:
         # ID контакта для теста
-        test_contact_id = 60754173
+        test_contact_id = 60766225
 
         # Ищем открытую сделку
-        open_lead = await client.check_duplicate_lead(contact_id=test_contact_id, pipeline_id=8598230)
-        # open_lead = await client.check_duplicate_lead(contact_id=test_contact_id)
+        # open_lead = await client.check_duplicate_lead(contact_id=test_contact_id, pipeline_id=8598230)
+        open_lead = await client.check_duplicate_lead(contact_id=test_contact_id)
 
         if open_lead:
             print(f"\n✓ FULL lead: {open_lead}")
