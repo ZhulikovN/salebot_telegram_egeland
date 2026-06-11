@@ -10,7 +10,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-@router.get("/media/{filename}")
+@router.api_route("/media/{filename}", methods=["GET", "HEAD"])
 async def serve_media(filename: str) -> FileResponse:
     """
     Отдать временный медиафайл Salebot-у.

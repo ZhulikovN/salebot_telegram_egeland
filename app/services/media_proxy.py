@@ -12,7 +12,7 @@ from app.settings import settings
 logger = logging.getLogger(__name__)
 
 MEDIA_DIR = Path("/tmp/salebot_media")
-MEDIA_TTL_SECONDS = 300  # 5 минут
+MEDIA_TTL_SECONDS = 86400  # 24 часа — файл должен жить, пока Telegram его не заберёт
 
 
 def _ensure_media_dir() -> None:
