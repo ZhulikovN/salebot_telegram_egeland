@@ -177,7 +177,6 @@ class ConversationManager:
             conversation.conversation_id,
         )
 
-        is_first_message = conversation.messages_count == 0
         attachments = attachments or []
 
         # Отправляем текст и вложения; при AmojoNotFoundError (чат удалён вручную в AmoCRM)
@@ -190,10 +189,9 @@ class ConversationManager:
                     sender_id=f"tg:{platform_id}",
                     sender_name=client_name,
                     text=message_text,
-                    silent=not is_first_message,
+                    silent=False,
                 )
                 await self.storage.increment_message_count(conversation.conversation_id)
-                is_first_message = False
 
             for media_url in attachments:
                 await self.amojo.send_incoming_message(
@@ -202,11 +200,10 @@ class ConversationManager:
                     sender_id=f"tg:{platform_id}",
                     sender_name=client_name,
                     text="",
-                    silent=not is_first_message,
+                    silent=False,
                     media_url=media_url,
                 )
                 await self.storage.increment_message_count(conversation.conversation_id)
-                is_first_message = False
 
         except AmojoNotFoundError:
             # Чат был удалён вручную в AmoCRM — пересоздаём и повторяем.
@@ -229,8 +226,6 @@ class ConversationManager:
                     f"— message not delivered"
                 )
 
-            is_first_message = conversation.messages_count == 0
-
             if message_text:
                 await self.amojo.send_incoming_message(
                     conversation_id=conversation.conversation_id,
@@ -238,10 +233,9 @@ class ConversationManager:
                     sender_id=f"tg:{platform_id}",
                     sender_name=client_name,
                     text=message_text,
-                    silent=not is_first_message,
+                    silent=False,
                 )
                 await self.storage.increment_message_count(conversation.conversation_id)
-                is_first_message = False
 
             for media_url in attachments:
                 await self.amojo.send_incoming_message(
@@ -250,11 +244,10 @@ class ConversationManager:
                     sender_id=f"tg:{platform_id}",
                     sender_name=client_name,
                     text="",
-                    silent=not is_first_message,
+                    silent=False,
                     media_url=media_url,
                 )
                 await self.storage.increment_message_count(conversation.conversation_id)
-                is_first_message = False
 
         if not message_text and not attachments:
             logger.warning(
@@ -466,7 +459,6 @@ class ConversationManager:
             # В этом случае ищем выжившего по platform_id чтобы не создавать
             # сделку с мёртвым контактом (что даёт пустую сделку без привязки).
             contact_id = conversation.contact_id
-            contact_absorbed = False
             logger.info(
                 "Reopen: checking contact liveness: contact_id=%s, platform_id=%s, bot=%s",
                 contact_id,
@@ -477,7 +469,6 @@ class ConversationManager:
 
             if contact_data == {}:
                 # Контакт поглощён (204) — ищем актуального
-                contact_absorbed = True
                 fresh_contact_id = await self._find_or_create_contact(
                     platform_id=platform_id,
                     client_name=client_name,
@@ -518,12 +509,11 @@ class ConversationManager:
                     contact_id,
                 )
 
-            # После слияния контактов выживший может иметь открытую сделку в любой воронке —
-            # ищем по всем воронкам чтобы не создавать дубль.
-            # В штатном сценарии (контакт живой) ищем только в воронке бота.
+            # Ищем открытую сделку во всех воронках — чтобы не создавать дубль,
+            # даже если существующая сделка находится в воронке другого бота.
             duplicate_lead = await self.amocrm.check_duplicate_lead(
                 contact_id=contact_id,
-                pipeline_id=None if contact_absorbed else bot_config.pipeline_id,
+                pipeline_id=None,
             )
 
             if duplicate_lead:
@@ -545,6 +535,29 @@ class ConversationManager:
                     utm_data=utm_data,
                 )
                 logger.info("New lead created on reopen: lead_id=%s", lead_id)
+
+                # # Создаём новый amojo-чат: старый привязан к закрытому лиду в AmoCRM
+                # # и сообщения продолжат уходить туда, даже если мы обновили lead_id в БД.
+                # new_conversation_id = str(uuid4())
+                # profile_link = f"https://t.me/{tg_username}" if tg_username else None
+                # new_chat_id = await self.amocrm.create_chat_in_amojo(
+                #     conversation_id=new_conversation_id,
+                #     user_id=f"tg:{platform_id}",
+                #     user_name=client_name,
+                #     profile_link=profile_link,
+                # )
+                # await self.amocrm.link_chat_to_contact(
+                #     contact_id=contact_id,
+                #     chat_id=new_chat_id,
+                # )
+                # await self.storage.update_conversation_id(platform_id, bot_name, new_conversation_id)
+                # logger.info(
+                #     "Reopen: new lead created — new amojo chat created: old_conv=%s, new_conv=%s, contact=%s, lead=%s",
+                #     conversation.conversation_id,
+                #     new_conversation_id,
+                #     contact_id,
+                #     lead_id,
+                # )
 
             await self.salebot.save_variables(
                 client_id=salebot_client_id,
