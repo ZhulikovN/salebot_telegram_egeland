@@ -68,12 +68,25 @@ _BOT_CONFIGS: dict[str, BotConfig] = {
         lead_name="Заявка: MAX - Перегон - @egeland_connection_bot",
         platform_id_field=settings.FIELD_MAX_USER_ID,
     ),
+    "298311406": BotConfig(
+        pipeline_id=settings.AMOCRM_PIPELINE_ID_LEADS,
+        status_id=settings.AMOCRM_STATUS_ID_LEADS,
+        lead_name="Заявка: MAX - Flocktory - @egeland_edu_bot",
+        platform_id_field=settings.FIELD_MAX_USER_ID,
+    ),
+    "301899084": BotConfig(
+        pipeline_id=settings.AMOCRM_PIPELINE_ID_LEADS,
+        status_id=settings.AMOCRM_STATUS_ID_LEADS,
+        lead_name="Заявка: MAX - RIS.Promo - @egeland_eduwith_bot",
+        platform_id_field=settings.FIELD_MAX_USER_ID,
+    ),
     # Instagram
     "mikhail_matematik": BotConfig(
         pipeline_id=settings.AMOCRM_PIPELINE_ID_IG_MIKHAIL,
         status_id=settings.AMOCRM_STATUS_ID_IG_MIKHAIL,
         lead_name="Заявка: IG - mikhail_matematik",
         default_tags=(681886,),  # тег "instagram"
+        platform_id_field=settings.FIELD_IG_USERNAME,
         keywords=(
             ("диагностика", 916729),
             ("курс", 737540),
