@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     FIELD_MAX_USER_ID: int = Field(
         default=813975, description="ID поля Max user id (Radist.online)"
     )
+    FIELD_IG_USERNAME: int = Field(
+        default=814675, description="ID поля Ник Instagram"
+    )
 
     # UTM-метки контакта (первое касание)
     FIELD_UTM_SOURCE: int = Field(default=688736, description="ID поля utm_source контакта")
