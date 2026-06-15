@@ -117,28 +117,42 @@ class ConversationManager:
                 closed_statuses = {settings.STATUS_SUCCESS, settings.STATUS_CLOSED}
                 lead_status = lead.get("status_id")
                 if lead_status is not None and lead_status in closed_statuses:
-                    # Сделка закрыта: создаём новую сделку, переиспользуем amojo-чат.
+                #     # Сделка закрыта: создаём новую сделку, переиспользуем amojo-чат.
+                #     logger.info(
+                #         "Lead %s is closed (status=%s), reopening conversation for platform_id=%s, bot=%s",
+                #         conversation.lead_id,
+                #         lead_status,
+                #         platform_id,
+                #         bot_name,
+                #     )
+                #     conversation = await self._reopen_conversation(
+                #         conversation=conversation,
+                #         platform_id=platform_id,
+                #         bot_name=bot_name,
+                #         salebot_client_id=salebot_client_id,
+                #         client_name=client_name,
+                #         tg_username=tg_username,
+                #         utm_data=utm_data,
+                #     )
+                # else:
+                #     # status_id=None — переходное состояние AmoCRM (слияние контактов/сделок
+                #     # через NOVA или другой виджет). Сделка физически существует, считаем
+                #     # её открытой и доставляем сообщение без создания дубля.
+                #     current_lead = lead
+                #
+                    # Сделка закрыта (142/143): НЕ создаём новую сделку.
+                    # Доставляем сообщение в существующий amojo-чат закрытой сделки —
+                    # менеджер видит новые сообщения прямо в закрытой сделке.
                     logger.info(
-                        "Lead %s is closed (status=%s), reopening conversation for platform_id=%s, bot=%s",
+                        "Lead %s is closed (status=%s), delivering to existing chat: platform_id=%s, bot=%s",
                         conversation.lead_id,
                         lead_status,
                         platform_id,
                         bot_name,
                     )
-                    conversation = await self._reopen_conversation(
-                        conversation=conversation,
-                        platform_id=platform_id,
-                        bot_name=bot_name,
-                        salebot_client_id=salebot_client_id,
-                        client_name=client_name,
-                        tg_username=tg_username,
-                        utm_data=utm_data,
-                    )
-                else:
-                    # status_id=None — переходное состояние AmoCRM (слияние контактов/сделок
-                    # через NOVA или другой виджет). Сделка физически существует, считаем
-                    # её открытой и доставляем сообщение без создания дубля.
-                    current_lead = lead
+                # Независимо от статуса (открытая, закрытая, status_id=None) —
+                # доставляем в существующий amojo-чат без создания дубля сделки.
+                current_lead = lead
 
         if not conversation:
             logger.info(
