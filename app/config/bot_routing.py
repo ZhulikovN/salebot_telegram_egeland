@@ -92,6 +92,28 @@ _BOT_CONFIGS: dict[str, BotConfig] = {
             ("курс", 737540),
         ),
     ),
+    # ВКонтакте — Общая группа ЕГЭ и ОГЭ (Group ID: 203482421)
+    "203482421": BotConfig(
+        pipeline_id=10849334,
+        status_id=85382934,
+        lead_name="Заявка: ВК - Общая группа - ЕГЭ и ОГЭ",
+        default_tags=(656132,),  # тег "vk"
+        platform_id_field=settings.FIELD_VK_ID,
+    ),
+    "el_efir_bot": BotConfig(
+        pipeline_id=10849334,
+        status_id=85382934,
+        lead_name="Заявка: TG - @el_efir_bot",
+        default_tags=(660360,),  # тег "telegram"
+    ),
+    "el_diagnostic_bot": BotConfig(
+        pipeline_id=10243538,
+        status_id=81078194,
+        lead_name="Заявка: TG - @el_diagnostic_bot",
+        pipeline_triggers=(
+            ("Отправить телефон", 10243538, 81078194),
+        ),
+    ),
     "el_connetbot": BotConfig(
         pipeline_id=settings.AMOCRM_PIPELINE_ID_LEADS,
         status_id=settings.AMOCRM_STATUS_ID_LEADS,
@@ -117,11 +139,20 @@ _BOT_CONFIGS: dict[str, BotConfig] = {
         status_id=75778598,
         lead_name="Заявка: TG - @el_personal_bot",
         pipeline_triggers=(
+            # start=efir — первое сообщение клиента при переходе по ссылке
+            ("efir",               10849334, 85382938),
+            ("Купить курс",        10849334, 85383566),
+            ("Узнать подробности", 10849334, 85383538),
+            # старые триггеры внутри воронки 9472270
             ("Есть вопросики",     9472270, 75778626),
-            ("Узнать подробности", 9472270, 75778658),
-            ("Занять место",       9472270, 75778658),
         ),
         keywords=(
+            ("купить курс",        907137),   # тег КУПИТЬ КУРС
+            ("узнать подробности", 914269),   # тег УЗНАТЬ ПОДРОБНОСТИ
+            ("позвать человека",   905921),   # тег ЕСТЬ ВОПРОС
+            ("есть вопросики",     905921),   # тег ЕСТЬ ВОПРОС
+            ("есть вопрос",        905921),   # тег ЕСТЬ ВОПРОС
+            # старые ключевые слова
             ("есть вопросики",     917969),
             ("узнать подробности", 917971),
             ("занять место",       917973),
