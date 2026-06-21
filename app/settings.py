@@ -59,6 +59,9 @@ class Settings(BaseSettings):
     FIELD_IG_USERNAME: int = Field(
         default=814675, description="ID поля Ник Instagram"
     )
+    FIELD_VK_ID: int = Field(
+        default=814023, description="ID поля ВКонтакте ID клиента"
+    )
 
     # UTM-метки контакта (первое касание)
     FIELD_UTM_SOURCE: int = Field(default=688736, description="ID поля utm_source контакта")
@@ -91,10 +94,10 @@ class Settings(BaseSettings):
 
     # Воронка и этап — Instagram mikhail_matematik
     AMOCRM_PIPELINE_ID_IG_MIKHAIL: int = Field(
-        default=10243538, description="ID воронки для Instagram mikhail_matematik"
+        default=10195498, description="ID воронки для Instagram mikhail_matematik"
     )
     AMOCRM_STATUS_ID_IG_MIKHAIL: int = Field(
-        default=81078194, description="ID этапа для Instagram mikhail_matematik"
+        default=80731234, description="ID этапа для Instagram mikhail_matematik"
     )
 
     # Статусы закрытых этапов (для проверки дублей)
