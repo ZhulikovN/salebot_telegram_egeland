@@ -113,6 +113,14 @@ class ConversationManager:
                     tg_username=tg_username,
                     utm_data=utm_data,
                 )
+                # После reopen новая сделка создана в начальной воронке бота.
+                # Устанавливаем current_lead чтобы pipeline_triggers могли сработать.
+                if conversation:
+                    bot_config_reopen = get_bot_config(bot_name)
+                    current_lead = {
+                        "pipeline_id": bot_config_reopen.pipeline_id,
+                        "status_id": bot_config_reopen.status_id,
+                    }
             else:
                 closed_statuses = {settings.STATUS_SUCCESS, settings.STATUS_CLOSED}
                 lead_status = lead.get("status_id")
@@ -185,6 +193,14 @@ class ConversationManager:
                     bot_name,
                 )
                 return None
+
+            # Устанавливаем current_lead для нового диалога чтобы pipeline_triggers
+            # могли сработать уже на первом сообщении (например, start=efir).
+            bot_config_init = get_bot_config(bot_name)
+            current_lead = {
+                "pipeline_id": bot_config_init.pipeline_id,
+                "status_id": bot_config_init.status_id,
+            }
 
         logger.info(
             "Sending message to amojo: conversation=%s",
