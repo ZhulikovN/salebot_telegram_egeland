@@ -94,8 +94,8 @@ _BOT_CONFIGS: dict[str, BotConfig] = {
     ),
     # ВКонтакте — Общая группа ЕГЭ и ОГЭ (Group ID: 203482421)
     "203482421": BotConfig(
-        pipeline_id=10849334,
-        status_id=85382934,
+        pipeline_id=10195498,
+        status_id=80731234,
         lead_name="Заявка: ВК - Общая группа - ЕГЭ и ОГЭ",
         default_tags=(656132,),  # тег "vk"
         platform_id_field=settings.FIELD_VK_ID,
