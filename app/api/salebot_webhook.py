@@ -9,11 +9,6 @@ from app.workers.queue import push_task
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# # Список разрешенных ботов (все остальные будут игнорироваться)
-# ALLOWED_BOTS = {
-#     "test_el_salebot",
-# }
-
 
 @router.post("/webhook/salebot")
 async def salebot_webhook(webhook: SalebotWebhook, request: Request) -> dict[str, str | bool]:
@@ -75,6 +70,7 @@ async def salebot_webhook(webhook: SalebotWebhook, request: Request) -> dict[str
             msg_preview,
         )
 
+        queue_name = "tasks:bot" if is_bot else "tasks:priority"
         await push_task(
             "salebot_message",
             {
@@ -88,6 +84,7 @@ async def salebot_webhook(webhook: SalebotWebhook, request: Request) -> dict[str
                 "utm_data": webhook.utm_data,
                 "is_bot_message": is_bot,
             },
+            queue_name=queue_name,
         )
 
         logger.info(
