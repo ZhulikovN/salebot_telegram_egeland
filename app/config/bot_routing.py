@@ -80,6 +80,13 @@ _BOT_CONFIGS: dict[str, BotConfig] = {
         lead_name="Заявка: MAX - RIS.Promo - @egeland_eduwith_bot",
         platform_id_field=settings.FIELD_MAX_USER_ID,
     ),
+    # Max — el_personal_bot (Group ID: 366667105)
+    "366667105": BotConfig(
+        pipeline_id=9472270,
+        status_id=75778598,
+        lead_name="Заявка: MAX - @el_personal_bot",
+        platform_id_field=settings.FIELD_MAX_USER_ID,
+    ),
     # Instagram
     "mikhail_matematik": BotConfig(
         pipeline_id=settings.AMOCRM_PIPELINE_ID_IG_MIKHAIL,
