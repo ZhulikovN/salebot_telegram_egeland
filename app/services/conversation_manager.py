@@ -308,8 +308,27 @@ class ConversationManager:
             bot_config = get_bot_config(bot_name)
             for trigger_text, target_pipeline_id, target_status_id in bot_config.pipeline_triggers:
                 if message_text == trigger_text:
-                    if (current_lead.get("pipeline_id") != target_pipeline_id or
-                        current_lead.get("status_id") != target_status_id):
+                    current_pipeline_id = current_lead.get("pipeline_id")
+                    current_status_id = current_lead.get("status_id")
+                    # Запрет движения назад: только внутри той же воронки и когда
+                    # у бота задан stage_order. Если ранг цели меньше текущего — пропускаем.
+                    if (bot_config.stage_order is not None and
+                            current_pipeline_id == target_pipeline_id):
+                        current_rank = bot_config.stage_order.get(current_status_id)
+                        target_rank = bot_config.stage_order.get(target_status_id)
+                        if (current_rank is not None and target_rank is not None and
+                                target_rank < current_rank):
+                            logger.info(
+                                "Lead %s backward move blocked: %s (rank %s) -> %s (rank %s)",
+                                conversation.lead_id,
+                                current_status_id,
+                                current_rank,
+                                target_status_id,
+                                target_rank,
+                            )
+                            break
+                    if (current_pipeline_id != target_pipeline_id or
+                        current_status_id != target_status_id):
                         await self.amocrm.move_lead(
                             conversation.lead_id, target_pipeline_id, target_status_id
                         )
