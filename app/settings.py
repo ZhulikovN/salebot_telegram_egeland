@@ -46,6 +46,27 @@ class Settings(BaseSettings):
     SALEBOT_API_KEY: str = Field(description="API ключ для Salebot")
     SALEBOT_PROJECT_ID: int = Field(description="ID проекта в Salebot (799515)")
 
+    # Токены Telegram-ботов для прямой отправки медиа через relay (в обход Salebot).
+    # Наш сервер (Yandex Cloud) не может напрямую достучаться до api.telegram.org,
+    # а Salebot умеет передавать вложение только ссылкой, которую Telegram не может
+    # скачать с нашего хостинга. Поэтому для ботов из этого маппинга файл грузится
+    # байтами через relay-сервис (см. папку relay/).
+    # Формат env: TELEGRAM_BOT_TOKENS={"el_connetbot": "123:AAA..."}
+    TELEGRAM_BOT_TOKENS: dict[str, str] = Field(
+        default_factory=dict,
+        description="Маппинг bot_name → токен Telegram Bot API",
+    )
+
+    # Relay-сервис на отдельном VPS вне РФ-облаков (см. relay/README.md).
+    TELEGRAM_RELAY_URL: str = Field(
+        default="",
+        description="URL relay-сервиса, например https://relay.egeinformatika.ru",
+    )
+    TELEGRAM_RELAY_SECRET: str = Field(
+        default="",
+        description="Общий секрет для аутентификации запросов к relay (X-Relay-Secret)",
+    )
+
     # ID кастомных полей контакта в AmoCRM
     FIELD_TG_ID: int = Field(
         default=811310, description="ID поля Telegram user id (Radist.online)"

@@ -1,0 +1,24 @@
+# Разместить в /etc/nginx/sites-available/relay и включить:
+#   sudo ln -s /etc/nginx/sites-available/relay /etc/nginx/sites-enabled/relay
+#   sudo nginx -t && sudo systemctl reload nginx
+#
+# После этого выпустить сертификат:
+#   sudo certbot --nginx -d relay.egeinformatika.ru
+# certbot сам допишет сюда блоки listen 443/ssl и редирект с 80 на 443.
+
+server {
+    listen 80;
+    server_name relay.egeinformatika.ru;
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Медиафайлы могут быть увесистыми (видео/голосовые).
+        client_max_body_size 50m;
+        proxy_read_timeout 130s;
+    }
+}
