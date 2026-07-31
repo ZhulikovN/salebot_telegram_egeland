@@ -46,6 +46,16 @@ class Settings(BaseSettings):
     SALEBOT_API_KEY: str = Field(description="API ключ для Salebot")
     SALEBOT_PROJECT_ID: int = Field(description="ID проекта в Salebot (799515)")
 
+    # Токены Telegram-ботов для прямой отправки медиа в обход Salebot.
+    # Salebot отдаёт Telegram только ссылку на файл, но серверы Telegram не могут
+    # скачать её с нашего хостинга — картинка приходит клиенту текстовой ссылкой.
+    # Для ботов из этого маппинга медиа грузится в Bot API байтами.
+    # Формат env: TELEGRAM_BOT_TOKENS={"el_connetbot": "123:AAA..."}
+    TELEGRAM_BOT_TOKENS: dict[str, str] = Field(
+        default_factory=dict,
+        description="Маппинг bot_name → токен Telegram Bot API",
+    )
+
     # ID кастомных полей контакта в AmoCRM
     FIELD_TG_ID: int = Field(
         default=811310, description="ID поля Telegram user id (Radist.online)"
