@@ -7,14 +7,7 @@ from app.config.bot_routing import get_bot_config
 from app.db.storage import Conversation, get_conversation_storage
 from app.services.amocrm_client import AmoCRMClient
 from app.services.amojo_client import AmojoClient, AmojoNotFoundError
-from app.services.media_proxy import download_and_proxy, download_media_bytes
 from app.services.salebot_client import SalebotClient
-from app.services.telegram_client import (
-    CAPTION_LIMIT,
-    TelegramClient,
-    TelegramSendError,
-    supports_media_type,
-)
 from app.settings import settings
 from app.utils.redis_connection import get_redis
 
@@ -892,26 +885,6 @@ class ConversationManager:
         if not conversation:
             raise ValueError(f"Conversation not found: {conversation_id}")
 
-        # Вложение отправляем напрямую в Telegram, если для бота есть токен.
-        if media_url:
-            # Текст длиннее лимита подписи не влезет в сообщение с вложением —
-            # такой досылаем отдельно через Salebot.
-            caption = (
-                message_text
-                if message_text and len(message_text) <= CAPTION_LIMIT
-                else None
-            )
-            if await self._send_media_via_telegram(
-                conversation=conversation,
-                message_type=message_type,
-                media_url=media_url,
-                caption=caption,
-            ):
-                if caption or not message_text:
-                    await self.storage.increment_message_count(conversation_id)
-                    return
-                media_url = None
-
         # Маппинг типов amojo → Salebot attachment_type
         amojo_to_salebot_type: dict[str, str] = {
             "picture": "image",
@@ -924,6 +897,7 @@ class ConversationManager:
         # Проксируем медиафайл через наш сервер (drive-b.amocrm.ru требует авторизацию)
         public_media_url: str | None = None
         if media_url and salebot_attachment_type:
+            from app.services.media_proxy import download_and_proxy
             public_media_url = await download_and_proxy(media_url)
             if not public_media_url:
                 logger.error(
@@ -950,58 +924,6 @@ class ConversationManager:
             message_type,
         )
         await self.storage.increment_message_count(conversation_id)
-
-    async def _send_media_via_telegram(
-        self,
-        conversation: Conversation,
-        message_type: str,
-        media_url: str,
-        caption: str | None,
-    ) -> bool:
-        """
-        Отправить вложение клиенту напрямую через Telegram Bot API.
-
-        Salebot передаёт Telegram только ссылку на файл, а серверы Telegram
-        не могут скачать её с нашего хостинга — клиент получает текстовую ссылку
-        вместо картинки. Поэтому для ботов с настроенным токеном грузим файл байтами.
-
-        Args:
-            conversation: Диалог (нужны platform_id как chat_id и bot_name)
-            message_type: Тип вложения из amojo (picture/voice/video/file)
-            media_url: URL файла в AmoCRM
-            caption: Подпись к вложению
-
-        Returns:
-            True если отправлено, False — нужен фолбэк на отправку через Salebot
-        """
-        token = settings.TELEGRAM_BOT_TOKENS.get(conversation.bot_name)
-        if not token or not supports_media_type(message_type):
-            return False
-
-        downloaded = await download_media_bytes(media_url)
-        if not downloaded:
-            return False
-
-        content, filename = downloaded
-
-        try:
-            await TelegramClient(token).send_media(
-                chat_id=conversation.platform_id,
-                media_type=message_type,
-                content=content,
-                filename=filename,
-                caption=caption,
-            )
-        except TelegramSendError as e:
-            logger.error(
-                "Direct Telegram send failed, falling back to Salebot: bot=%s, type=%s, %s",
-                conversation.bot_name,
-                message_type,
-                e,
-            )
-            return False
-
-        return True
 
     async def close(self) -> None:
         """Закрыть все соединения."""

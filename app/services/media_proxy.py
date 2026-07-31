@@ -44,20 +44,26 @@ def _get_extension(url: str) -> str:
     return ".bin"
 
 
-async def download_media_bytes(media_url: str) -> tuple[bytes, str] | None:
+async def download_and_proxy(media_url: str) -> str | None:
     """
-    Скачать медиафайл с AmoCRM и вернуть его содержимое.
+    Скачать медиафайл с AmoCRM и вернуть публичный URL нашего сервера.
 
-    AmoCRM drive URLs закрыты — требуют авторизацию, поэтому качаем с нашим токеном.
-    Используется для прямой загрузки файла в Telegram Bot API.
+    AmoCRM drive URLs закрыты — требуют авторизацию.
+    Мы скачиваем файл с нашим токеном, сохраняем в /tmp/,
+    и отдаём Salebot наш публичный URL.
 
     Args:
         media_url: URL файла на drive-b.amocrm.ru
 
     Returns:
-        Кортеж (содержимое файла, имя файла) или None при ошибке
+        Публичный URL файла на нашем сервере или None при ошибке
     """
-    filename = f"{uuid.uuid4().hex}{_get_extension(media_url)}"
+    _ensure_media_dir()
+    _cleanup_old_files()
+
+    ext = _get_extension(media_url)
+    filename = f"{uuid.uuid4().hex}{ext}"
+    filepath = MEDIA_DIR / filename
 
     headers = {
         "Authorization": f"Bearer {settings.AMO_ACCESS_TOKEN}",
@@ -80,45 +86,19 @@ async def download_media_bytes(media_url: str) -> tuple[bytes, str] | None:
 
                 content = await response.read()
 
-        logger.info("Media downloaded from AMO: %s bytes, file=%s", len(content), filename)
-        return content, filename
+        filepath.write_bytes(content)
+
+        public_url = f"{settings.PUBLIC_URL}/media/{filename}"
+        logger.info(
+            "Media downloaded and proxied: %s bytes, url=%s",
+            len(content),
+            public_url,
+        )
+        return public_url
 
     except Exception as e:
         logger.error("Error downloading media from AMO: %s", e, exc_info=True)
         return None
-
-
-async def download_and_proxy(media_url: str) -> str | None:
-    """
-    Скачать медиафайл с AmoCRM и вернуть публичный URL нашего сервера.
-
-    Мы скачиваем файл с нашим токеном, сохраняем в /tmp/,
-    и отдаём Salebot наш публичный URL.
-
-    Args:
-        media_url: URL файла на drive-b.amocrm.ru
-
-    Returns:
-        Публичный URL файла на нашем сервере или None при ошибке
-    """
-    _ensure_media_dir()
-    _cleanup_old_files()
-
-    downloaded = await download_media_bytes(media_url)
-    if not downloaded:
-        return None
-
-    content, filename = downloaded
-
-    try:
-        (MEDIA_DIR / filename).write_bytes(content)
-    except Exception as e:
-        logger.error("Error saving media file %s: %s", filename, e, exc_info=True)
-        return None
-
-    public_url = f"{settings.PUBLIC_URL}/media/{filename}"
-    logger.info("Media proxied: %s bytes, url=%s", len(content), public_url)
-    return public_url
 
 
 def get_media_path(filename: str) -> Path | None:
