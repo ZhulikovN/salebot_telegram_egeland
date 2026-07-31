@@ -22,6 +22,12 @@ logger = logging.getLogger(__name__)
 
 _ECHO_TTL = 15  # секунд
 
+# amoCRM иногда присылает видео (например .mov) с message_type="file" вместо
+# "video" — тогда relay пробует только sendDocument и клиент получает видео
+# файлом без превью. Если расширение явно видео — переопределяем тип, чтобы
+# сначала пробовался sendVideo.
+_VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".3gp"}
+
 
 def _echo_key(platform_id: str, bot_name: str, text: str) -> str:
     """Redis-ключ для дедупликации эхо-сообщений менеджера."""
@@ -987,10 +993,24 @@ class ConversationManager:
 
         content, filename = downloaded
 
+        # amoCRM классифицирует некоторые видео (например .mov) как "file" —
+        # доверяем расширению файла больше, чем типу от amoCRM, чтобы relay
+        # попробовал sendVideo, а не сразу sendDocument.
+        effective_type = message_type
+        if message_type == "file" and any(
+            filename.lower().endswith(ext) for ext in _VIDEO_EXTENSIONS
+        ):
+            effective_type = "video"
+            logger.info(
+                "Overriding message_type file→video by extension: bot=%s, filename=%s",
+                conversation.bot_name,
+                filename,
+            )
+
         try:
             await TelegramRelayClient(token).send_media(
                 chat_id=conversation.platform_id,
-                media_type=message_type,
+                media_type=effective_type,
                 content=content,
                 filename=filename,
                 caption=caption,
