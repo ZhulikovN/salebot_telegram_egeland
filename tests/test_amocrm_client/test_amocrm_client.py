@@ -8,34 +8,34 @@ TEST_LEAD_ID = 40562799      # живая сделка → ожидаем dict �
 TEST_ABSORBED_LEAD_ID = 40564811  # поглощён NOVA → ожидаем {}
 TEST_TG_ID = "5305636742"
 TEST_USERNAME = "test_username"
-TEST_ABSORBED_CONTACT_ID = 60758761  # поглощён NOVA → ожидаем {}
+TEST_ABSORBED_CONTACT_ID = 60799113  # поглощён NOVA → ожидаем {}
 
 
 
-# @pytest.mark.asyncio
-# @pytest.mark.integration
-# async def test_get_contact() -> None:
-#     client = AmoCRMClient()
-#
-#     # # Живой контакт — должен вернуть dict с данными
-#     # result = await client.get_contact(TEST_CONTACT_ID)
-#     # if result is None:
-#     #     print(f"\n✗ Contact {TEST_CONTACT_ID} returned None (404 or error)")
-#     # elif result == {}:
-#     #     print(f"\n✗ Contact {TEST_CONTACT_ID} returned {{}} (204 — absorbed)")
-#     # else:
-#     #     print(f"\n✓ Contact {TEST_CONTACT_ID} is alive: name={result.get('name')}")
-#
-#     # Поглощённый контакт — должен вернуть {}
-#     result_absorbed = await client.get_contact(TEST_ABSORBED_CONTACT_ID)
-#     if result_absorbed == {}:
-#         print(f"✓ Contact {TEST_ABSORBED_CONTACT_ID} is absorbed (204) — {{}} as expected")
-#     elif result_absorbed is None:
-#         print(f"? Contact {TEST_ABSORBED_CONTACT_ID} returned None (404 or error)")
-#     else:
-#         print(f"? Contact {TEST_ABSORBED_CONTACT_ID} is alive: name={result_absorbed.get('name')}")
-#
-#     await client.close()
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_get_contact() -> None:
+    client = AmoCRMClient()
+
+    # # Живой контакт — должен вернуть dict с данными
+    # result = await client.get_contact(TEST_CONTACT_ID)
+    # if result is None:
+    #     print(f"\n✗ Contact {TEST_CONTACT_ID} returned None (404 or error)")
+    # elif result == {}:
+    #     print(f"\n✗ Contact {TEST_CONTACT_ID} returned {{}} (204 — absorbed)")
+    # else:
+    #     print(f"\n✓ Contact {TEST_CONTACT_ID} is alive: name={result.get('name')}")
+
+    # Поглощённый контакт — должен вернуть {}
+    result_absorbed = await client.get_contact(TEST_ABSORBED_CONTACT_ID)
+    if result_absorbed == {}:
+        print(f"✓ Contact {TEST_ABSORBED_CONTACT_ID} is absorbed (204) — {{}} as expected")
+    elif result_absorbed is None:
+        print(f"? Contact {TEST_ABSORBED_CONTACT_ID} returned None (404 or error)")
+    else:
+        print(f"? Contact {TEST_ABSORBED_CONTACT_ID} is alive: name={result_absorbed.get('name')}")
+
+    await client.close()
 
 
 # @pytest.mark.asyncio
@@ -324,39 +324,39 @@ TEST_ABSORBED_CONTACT_ID = 60758761  # поглощён NOVA → ожидаем 
 #         await amocrm_client.close()
 
 
-@pytest.mark.asyncio
-@pytest.mark.integration
-async def test_check_duplicate_lead() -> None:
-    """Тест поиска открытой сделки у контакта."""
-    client = AmoCRMClient()
-
-    try:
-        # ID контакта для теста
-        test_contact_id = 60754173
-
-        # Ищем открытую сделку
-        open_lead = await client.check_duplicate_lead(contact_id=test_contact_id, pipeline_id=8598230)
-        # open_lead = await client.check_duplicate_lead(contact_id=test_contact_id)
-
-        if open_lead:
-            print(f"\n✓ FULL lead: {open_lead}")
-            print(f"\n✓ Open lead found: {open_lead['id']}")
-            print(f"  - Pipeline: {open_lead.get('pipeline_id')}")
-            print(f"  - Status: {open_lead.get('status_id')}")
-
-            # Проверяем что сделка действительно привязана к контакту
-            contacts = open_lead.get("_embedded", {}).get("contacts", [])
-            contact_ids = [c["id"] for c in contacts]
-
-            assert test_contact_id in contact_ids, (
-                f"Lead {open_lead['id']} is not linked to contact {test_contact_id}! "
-                f"Linked to: {contact_ids}"
-            )
-            print(f"  - ✓ Lead is correctly linked to contact {test_contact_id}")
-        else:
-            print(f"\n✓ No open leads found for contact {test_contact_id}")
-
-    finally:
-        await client.close()
-
-
+# @pytest.mark.asyncio
+# @pytest.mark.integration
+# async def test_check_duplicate_lead() -> None:
+#     """Тест поиска открытой сделки у контакта."""
+#     client = AmoCRMClient()
+#
+#     try:
+#         # ID контакта для теста
+#         test_contact_id = 60766225
+#
+#         # Ищем открытую сделку
+#         # open_lead = await client.check_duplicate_lead(contact_id=test_contact_id, pipeline_id=8598230)
+#         open_lead = await client.check_duplicate_lead(contact_id=test_contact_id)
+#
+#         if open_lead:
+#             print(f"\n✓ FULL lead: {open_lead}")
+#             print(f"\n✓ Open lead found: {open_lead['id']}")
+#             print(f"  - Pipeline: {open_lead.get('pipeline_id')}")
+#             print(f"  - Status: {open_lead.get('status_id')}")
+#
+#             # Проверяем что сделка действительно привязана к контакту
+#             contacts = open_lead.get("_embedded", {}).get("contacts", [])
+#             contact_ids = [c["id"] for c in contacts]
+#
+#             assert test_contact_id in contact_ids, (
+#                 f"Lead {open_lead['id']} is not linked to contact {test_contact_id}! "
+#                 f"Linked to: {contact_ids}"
+#             )
+#             print(f"  - ✓ Lead is correctly linked to contact {test_contact_id}")
+#         else:
+#             print(f"\n✓ No open leads found for contact {test_contact_id}")
+#
+#     finally:
+#         await client.close()
+#
+#

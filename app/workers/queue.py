@@ -10,28 +10,31 @@ from app.utils.redis_connection import get_redis
 logger = logging.getLogger(__name__)
 
 
-async def push_task(task_type: str, data: dict[str, Any]) -> None:
+async def push_task(task_type: str, data: dict[str, Any], queue_name: str = "tasks:priority") -> None:
     """
-    Добавить задачу в глобальную очередь.
+    Добавить задачу в очередь.
 
-    Задача добавляется в общую очередь для распределения между воркерами.
+    Сообщения клиентов → tasks:priority (обрабатываются первыми).
+    Сообщения бота (рассылки) → tasks:bot (обрабатываются когда tasks:priority пуста).
 
     Args:
         task_type: Тип задачи (salebot_message, amojo_message)
         data: Данные задачи
+        queue_name: Имя очереди Redis (tasks:priority или tasks:bot)
 
     Raises:
         Exception: Если не удалось добавить задачу в Redis
     """
     try:
-        logger.info("PUSH_TASK STARTED: type=%s", task_type)
+        logger.info("PUSH_TASK STARTED: type=%s, queue=%s", task_type, queue_name)
         task = {"type": task_type, "data": data}
         redis = get_redis()
         logger.info("PUSH_TASK: got redis client")
-        await redis.rpush("tasks:global", json.dumps(task))
+        await redis.rpush(queue_name, json.dumps(task))
         logger.info(
-            "PUSH_TASK SUCCESS: type=%s, conversation_id=%s",
+            "PUSH_TASK SUCCESS: type=%s, queue=%s, conversation_id=%s",
             task_type,
+            queue_name,
             data.get("conversation_id", "unknown"),
         )
     except Exception as e:
@@ -54,7 +57,7 @@ async def pop_task(timeout: int = 5) -> dict[str, Any] | None:
     try:
         redis = get_redis()
         logger.info("POP_TASK: calling blpop with timeout=%d", timeout)
-        result = await redis.blpop("tasks:global", timeout=timeout)
+        result = await redis.blpop(["tasks:priority", "tasks:bot", "tasks:global"], timeout=timeout)
         logger.info("POP_TASK: blpop returned: %s", "data" if result else "None")
 
         if result:
@@ -146,15 +149,16 @@ async def pop_conversation_messages(
 
 async def get_queue_size() -> int:
     """
-    Получить текущий размер глобальной очереди задач.
+    Получить суммарный размер очередей задач (priority + bot).
 
     Returns:
-        Количество задач в очереди или 0 при ошибке
+        Количество задач в очередях или 0 при ошибке
     """
     try:
         redis = get_redis()
-        size = await redis.llen("tasks:global")
-        return size
+        priority = await redis.llen("tasks:priority")
+        bot = await redis.llen("tasks:bot")
+        return priority + bot
     except Exception as e:
         logger.error("Failed to get queue size: %s", e)
         return 0

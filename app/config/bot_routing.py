@@ -16,6 +16,26 @@ _COMMON_FIELD_TRIGGERS: tuple[tuple[str, int, int], ...] = (
     ("11 класс",  809893, 1374875),
 )
 
+# Ранги этапов воронки "ТГ БОТы" (id 9472270) для запрета движения сделки назад.
+# Правило: бот двигает сделку только если ранг целевого этапа >= ранга текущего.
+# Ранги выведены из правил запрета движения назад (ТЗ).
+_TG_BOTS_STAGE_ORDER: dict[int, int] = {
+    75778598: 0,  # В работе
+    75778626: 1,  # Ответ
+    75778630: 2,  # Выставил оффер
+    75778634: 3,  # Бесплатная польза
+    75778638: 3,  # Родители
+    75778642: 3,  # Ушёл в игнор
+    75778646: 3,  # Вышел на связь
+    75778650: 3,  # Забронировали место
+    75778654: 3,  # Бронь 10 класс
+    75778658: 3,  # Реквизиты выставлены
+    81046786: 4,  # МАТКАП
+    75778662: 4,  # Задержка оплаты
+    142:      4,  # Успешно реализовано
+    143:      4,  # Закрыто и не реализовано
+}
+
 
 @dataclass(frozen=True)
 class BotConfig:
@@ -41,6 +61,10 @@ class BotConfig:
     # Формат: (текст_кнопки, pipeline_id, status_id).
     # Перемещение происходит только один раз — если сделка уже в целевой воронке, пропускается.
     pipeline_triggers: tuple[tuple[str, int, int], ...] = field(default=())
+    # Ранги этапов воронки для запрета движения сделки назад по pipeline_triggers.
+    # Формат: {status_id: rank}. None = гард выключен (движение в любую сторону).
+    # Гард применяется только когда текущая и целевая воронка совпадают.
+    stage_order: dict[int, int] | None = field(default=None)
 
 
 # Конфигурация для каждого бота.
@@ -68,15 +92,57 @@ _BOT_CONFIGS: dict[str, BotConfig] = {
         lead_name="Заявка: MAX - Перегон - @egeland_connection_bot",
         platform_id_field=settings.FIELD_MAX_USER_ID,
     ),
+    "298311406": BotConfig(
+        pipeline_id=settings.AMOCRM_PIPELINE_ID_LEADS,
+        status_id=settings.AMOCRM_STATUS_ID_LEADS,
+        lead_name="Заявка: MAX - Flocktory - @egeland_edu_bot",
+        platform_id_field=settings.FIELD_MAX_USER_ID,
+    ),
+    "301899084": BotConfig(
+        pipeline_id=settings.AMOCRM_PIPELINE_ID_LEADS,
+        status_id=settings.AMOCRM_STATUS_ID_LEADS,
+        lead_name="Заявка: MAX - RIS.Promo - @egeland_eduwith_bot",
+        platform_id_field=settings.FIELD_MAX_USER_ID,
+    ),
+    # Max — el_personal_bot (Group ID: 366667105)
+    "366667105": BotConfig(
+        pipeline_id=9472270,
+        status_id=75778598,
+        lead_name="Заявка: MAX - @el_personal_bot",
+        platform_id_field=settings.FIELD_MAX_USER_ID,
+    ),
     # Instagram
     "mikhail_matematik": BotConfig(
         pipeline_id=settings.AMOCRM_PIPELINE_ID_IG_MIKHAIL,
         status_id=settings.AMOCRM_STATUS_ID_IG_MIKHAIL,
         lead_name="Заявка: IG - mikhail_matematik",
         default_tags=(681886,),  # тег "instagram"
+        platform_id_field=settings.FIELD_IG_USERNAME,
         keywords=(
             ("диагностика", 916729),
             ("курс", 737540),
+        ),
+    ),
+    # ВКонтакте — Общая группа ЕГЭ и ОГЭ (Group ID: 203482421)
+    "203482421": BotConfig(
+        pipeline_id=10195498,
+        status_id=80731234,
+        lead_name="Заявка: ВК - Общая группа - ЕГЭ и ОГЭ",
+        default_tags=(656132,),  # тег "vk"
+        platform_id_field=settings.FIELD_VK_ID,
+    ),
+    "el_efir_bot": BotConfig(
+        pipeline_id=10849334,
+        status_id=85382934,
+        lead_name="Заявка: TG - @el_efir_bot",
+        default_tags=(660360,),  # тег "telegram"
+    ),
+    "el_diagnostic_bot": BotConfig(
+        pipeline_id=10243538,
+        status_id=81078194,
+        lead_name="Заявка: TG - @el_diagnostic_bot",
+        pipeline_triggers=(
+            ("Отправить телефон", 10243538, 81078194),
         ),
     ),
     "el_connetbot": BotConfig(
@@ -103,6 +169,40 @@ _BOT_CONFIGS: dict[str, BotConfig] = {
         pipeline_id=9472270,
         status_id=75778598,
         lead_name="Заявка: TG - @el_personal_bot",
+        pipeline_triggers=(
+            ("Купить курс",        9472270, 75778658),
+            ("Есть вопросики",     9472270, 75778626),
+            ("Позвать человека",   9472270, 75778626),
+            ("Узнать подробности", 9472270, 75778630),
+            ("Занять место",       9472270, 75778658),
+        ),
+        stage_order=_TG_BOTS_STAGE_ORDER,
+        keywords=(
+            ("купить курс",        907137),   # тег КУПИТЬ КУРС
+            ("узнать подробности", 914269),   # тег УЗНАТЬ ПОДРОБНОСТИ
+            ("позвать человека",   905921),   # тег ЕСТЬ ВОПРОС
+            ("есть вопросики",     905921),   # тег ЕСТЬ ВОПРОС
+            ("есть вопрос",        905921),   # тег ЕСТЬ ВОПРОС
+            # старые ключевые слова
+            ("есть вопросики",     917969),
+            ("узнать подробности", 917971),
+            ("занять место",       917973),
+        ),
+        field_triggers=_COMMON_FIELD_TRIGGERS + (
+            # Кнопки класса — "Перешел/Перехожу в N класс" → соответствующий N класс
+            ("Перешел в 11 класс",    809893, 1374875),  # → 11 класс
+            ("Перехожу в 11 класс",   809893, 1374875),
+            ("Перехожу в 11-й класс", 809893, 1374875),
+            ("Перешел в 10 класс",    809893, 1374873),  # → 10 класс
+            ("Перехожу в 10 класс",   809893, 1374873),
+            ("Перехожу в 10-й класс", 809893, 1374873),
+            ("Перешел в 9 класс",     809893, 1374871),  # → 9 класс
+            ("Перехожу в 9 класс",    809893, 1374871),
+            ("Перехожу в 9-й класс",  809893, 1374871),
+            ("Перешел в 8 класс",     809893, 1378767),  # → 8 класс
+            ("Перехожу в 8 класс",    809893, 1378767),
+            ("Перехожу в 8-й класс",  809893, 1378767),
+        ),
     ),
 }
 
