@@ -86,11 +86,19 @@ _BOT_CONFIGS: dict[str, BotConfig] = {
         ),
     ),
     # Max messenger
-    "278172561": BotConfig(
-        pipeline_id=settings.AMOCRM_PIPELINE_ID_LEADS,
-        status_id=settings.AMOCRM_STATUS_ID_LEADS,
-        lead_name="Заявка: MAX - Перегон - @egeland_connection_bot",
+    "258057137": BotConfig(
+        pipeline_id=4423755,
+        status_id=79839682,
+        lead_name="Заявка: Max - ПОЛИНА РОП - Перегон",
         platform_id_field=settings.FIELD_MAX_USER_ID,
+        default_tags=(914873, 924885),  # max, max_egeland_connect_bot
+    ),
+    "278172561": BotConfig(
+        pipeline_id=4423755,
+        status_id=79839682,
+        lead_name="Заявка: Max - СВЕТА РОП - Перегон",
+        platform_id_field=settings.FIELD_MAX_USER_ID,
+        default_tags=(914873, 924871),  # max, egeland_connection_bot
     ),
     "298311406": BotConfig(
         pipeline_id=settings.AMOCRM_PIPELINE_ID_LEADS,
@@ -131,6 +139,15 @@ _BOT_CONFIGS: dict[str, BotConfig] = {
         default_tags=(656132,),  # тег "vk"
         platform_id_field=settings.FIELD_VK_ID,
     ),
+    "demo2_el_bot": BotConfig(
+        pipeline_id=settings.AMOCRM_PIPELINE_ID,
+        status_id=settings.AMOCRM_STATUS_ID,
+        lead_name="Заявка: TG - @demo2_el_bot",
+        default_tags=(660360,),  # тег "telegram"
+        pipeline_triggers=(
+            ("Позвать менеджера", 9472270, 75778594),
+        ),
+    ),
     "el_efir_bot": BotConfig(
         pipeline_id=10849334,
         status_id=85382934,
@@ -145,10 +162,17 @@ _BOT_CONFIGS: dict[str, BotConfig] = {
             ("Отправить телефон", 10243538, 81078194),
         ),
     ),
+    "el_connect_bot": BotConfig(
+        pipeline_id=4423755,
+        status_id=79839682,
+        lead_name="Заявка: TG - ПОЛИНА РОП - Перегон",
+        default_tags=(660360, 924883),  # telegram, tg_el_connect_bot
+    ),
     "el_connetbot": BotConfig(
-        pipeline_id=settings.AMOCRM_PIPELINE_ID_LEADS,
-        status_id=settings.AMOCRM_STATUS_ID_LEADS,
-        lead_name="Заявка: TG - Перегон - @el_connetbot",
+        pipeline_id=4423755,
+        status_id=79839682,
+        lead_name="Заявка: TG - СВЕТА РОП - Перегон",
+        default_tags=(660360, 924857),  # telegram, tg_el_connetbot
     ),
     "el_eduwith_bot": BotConfig(
         pipeline_id=settings.AMOCRM_PIPELINE_ID_LEADS,
