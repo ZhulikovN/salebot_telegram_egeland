@@ -1,4 +1,6 @@
 """Клиент для работы с Salebot API."""
+import asyncio
+import json
 import logging
 from typing import Any
 
@@ -7,6 +9,11 @@ import aiohttp
 from app.settings import settings
 
 logger = logging.getLogger(__name__)
+
+
+class RetryableSalebotError(aiohttp.ClientError):
+    """Временная ошибка Salebot (502/503/504) — запрос можно повторить."""
+    pass
 
 
 class SalebotClient:
@@ -23,6 +30,7 @@ class SalebotClient:
         message: str,
         attachment_url: str | None = None,
         attachment_type: str | None = None,
+        retry: int = 3,
     ) -> dict[str, Any]:
         """
         Отправить сообщение клиенту через Salebot API.
@@ -38,17 +46,24 @@ class SalebotClient:
             "attachment_type": "image/audio/video/file"  # обязателен если передан attachment_url
         }
 
+        Salebot периодически отдаёт 502/503/504 — это временные сбои на их
+        стороне. Без ретрая такое сообщение терялось бы безвозвратно, поэтому
+        эти ошибки повторяем с экспоненциальной задержкой. Ошибки вида 4xx
+        (например 404 client_not_found) не ретраим — они не временные, повтор
+        их не исправит.
+
         Args:
             client_id: salebot_client_id из БД (это client.id из webhook, НЕ platform_id!)
             message: текст сообщения (необязателен если передан attachment_url)
             attachment_url: URL медиафайла (опционально)
             attachment_type: тип вложения — image, audio, video, file (обязателен если передан attachment_url)
+            retry: количество попыток при временных ошибках (502/503/504)
 
         Returns:
             Ответ от Salebot API
 
         Raises:
-            aiohttp.ClientError: При ошибке запроса
+            aiohttp.ClientError: При ошибке запроса после всех попыток
         """
         if attachment_url:
             logger.info(
@@ -72,32 +87,60 @@ class SalebotClient:
             payload["attachment_url"] = attachment_url
             payload["attachment_type"] = attachment_type
 
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    url, json=payload, timeout=aiohttp.ClientTimeout(total=30)
-                ) as response:
-                    text = await response.text()
+        last_error: Exception | None = None
 
-                    if response.status >= 400:
-                        logger.error("Salebot API error %s: %s", response.status, text)
-                        raise aiohttp.ClientError(
-                            f"Salebot API error {response.status}: {text}"
-                        )
+        for attempt in range(retry):
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        url, json=payload, timeout=aiohttp.ClientTimeout(total=30)
+                    ) as response:
+                        text = await response.text()
 
-                    logger.info("Message sent to Salebot: %s", response.status)
-                    logger.debug("Salebot response: %s", text)
+                        if response.status in (502, 503, 504):
+                            raise RetryableSalebotError(
+                                f"Salebot API error {response.status}: {text[:200]}"
+                            )
 
-                    try:
-                        import json
-                        result = json.loads(text)
-                        return result
-                    except json.JSONDecodeError:
-                        return {"status": "ok", "response": text}
+                        if response.status >= 400:
+                            logger.error("Salebot API error %s: %s", response.status, text)
+                            raise aiohttp.ClientError(
+                                f"Salebot API error {response.status}: {text}"
+                            )
 
-        except Exception as e:
-            logger.error("Error sending message to Salebot: %s", e)
-            raise
+                        logger.info("Message sent to Salebot: %s", response.status)
+                        logger.info("Salebot response body: %s", text)
+
+                        try:
+                            return json.loads(text)
+                        except json.JSONDecodeError:
+                            return {"status": "ok", "response": text}
+
+            except RetryableSalebotError as e:
+                last_error = e
+                logger.error(
+                    "Salebot temporary error sending message (attempt %d/%d): client_id=%s, %s",
+                    attempt + 1,
+                    retry,
+                    client_id,
+                    e,
+                )
+                if attempt < retry - 1:
+                    delay = 2**attempt
+                    logger.info("Retrying Salebot send in %d seconds...", delay)
+                    await asyncio.sleep(delay)
+                    continue
+                logger.error(
+                    "All %d retry attempts to Salebot failed: client_id=%s", retry, client_id
+                )
+                raise
+            except Exception as e:
+                logger.error("Error sending message to Salebot (non-retryable): %s", e)
+                raise
+
+        if last_error:
+            raise last_error
+        return {}
 
     async def get_history(self, client_id: int) -> dict[str, Any]:
         """
