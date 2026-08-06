@@ -28,9 +28,10 @@ async def salebot_webhook(webhook: SalebotWebhook, request: Request) -> dict[str
     try:
         # Диагностический лог: показывает ВСЁ что приходит от Salebot (is_input=1 и is_input=0)
         logger.info(
-            "SALEBOT_RAW: id=%s, is_input=%s, platform_id=%s, bot=%s, message=%r",
+            "SALEBOT_RAW: id=%s, is_input=%s, message_id=%s, platform_id=%s, bot=%s, message=%r",
             webhook.id,
             webhook.is_input,
+            webhook.message_id,
             webhook.platform_id,
             webhook.bot_name,
             (webhook.message or "")[:80],
@@ -55,6 +56,18 @@ async def salebot_webhook(webhook: SalebotWebhook, request: Request) -> dict[str
         client_name = webhook.client.name or tg_username or str(webhook.platform_id)
 
         is_bot = not webhook.is_from_client
+
+        # Эхо сообщения менеджера: is_input=0 и message_id=None.
+        # Автосообщения бота из воронки имеют message_id=<число>.
+        # Менеджерские эхи имеют message_id=None — игнорируем их.
+        if is_bot and webhook.message_id is None:
+            logger.info(
+                "Manager echo suppressed: platform_id=%s, bot=%s, message=%r",
+                webhook.platform_id,
+                webhook.bot_name,
+                (webhook.message or "")[:60],
+            )
+            return {"status": "ignored", "reason": "manager_echo"}
 
         # Сообщения бота без текста не несут смысла в amoCRM
         if is_bot and not webhook.message:

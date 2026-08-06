@@ -1,5 +1,4 @@
 """Менеджер диалогов Salebot ↔ amoCRM."""
-import hashlib
 import logging
 from uuid import uuid4
 
@@ -20,19 +19,12 @@ from app.utils.redis_connection import get_redis
 
 logger = logging.getLogger(__name__)
 
-_ECHO_TTL = 15  # секунд
-
 # amoCRM иногда присылает видео (например .mov) с message_type="file" вместо
 # "video" — тогда relay пробует только sendDocument и клиент получает видео
 # файлом без превью. Если расширение явно видео — переопределяем тип, чтобы
 # сначала пробовался sendVideo.
 _VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".3gp"}
 
-
-def _echo_key(platform_id: str, bot_name: str, text: str) -> str:
-    """Redis-ключ для дедупликации эхо-сообщений менеджера."""
-    digest = hashlib.md5(text.encode("utf-8")).hexdigest()
-    return f"echo:{platform_id}:{bot_name}:{digest}"
 
 
 class ConversationManager:
@@ -835,20 +827,6 @@ class ConversationManager:
             bot_name: Название бота
             message_text: Текст сообщения бота
         """
-        # Проверяем: не является ли это эхом сообщения, которое мы сами отправили в Salebot
-        if message_text:
-            redis = get_redis()
-            key = _echo_key(platform_id, bot_name, message_text)
-            is_echo = await redis.getdel(key)
-            if is_echo:
-                logger.info(
-                    "Echo suppressed for platform_id=%s, bot=%s, text=%r",
-                    platform_id,
-                    bot_name,
-                    message_text[:60],
-                )
-                return
-
         conversation = await self.storage.get_by_platform_id(platform_id, bot_name)
 
         if not conversation:
@@ -936,12 +914,6 @@ class ConversationManager:
                     "Failed to proxy media, sending text only: url=%s",
                     media_url,
                 )
-
-        # Помечаем сообщение как "отправленное нами" — чтобы Salebot-эхо не дублировалось в amojo
-        if message_text:
-            redis = get_redis()
-            key = _echo_key(conversation.platform_id, conversation.bot_name, message_text)
-            await redis.setex(key, _ECHO_TTL, "1")
 
         await self.salebot.send_message(
             client_id=conversation.salebot_client_id,

@@ -50,6 +50,10 @@ class SalebotWebhook(BaseModel):
     internal_id: str | None = Field(
         default=None, description="ID сообщения в Telegram (может быть NULL)"
     )
+    message_id: int | None = Field(
+        default=None,
+        description="ID блока бота, из которого отправлено сообщение. NULL = сообщение менеджера (эхо), число = автосообщение из воронки бота",
+    )
 
     @property
     def is_from_client(self) -> bool:
