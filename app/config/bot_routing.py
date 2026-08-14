@@ -95,7 +95,7 @@ _BOT_CONFIGS: dict[str, BotConfig] = {
     ),
     "278172561": BotConfig(
         pipeline_id=4423755,
-        status_id=79839682,
+        status_id=87768358,
         lead_name="Заявка: Max - СВЕТА РОП - Перегон",
         platform_id_field=settings.FIELD_MAX_USER_ID,
         default_tags=(914873, 924871),  # max, egeland_connection_bot
@@ -162,6 +162,15 @@ _BOT_CONFIGS: dict[str, BotConfig] = {
             ("Отправить телефон", 10243538, 81078194),
         ),
     ),
+    "el_school_ege_bot": BotConfig(
+        pipeline_id=10195498,
+        status_id=80731234,
+        lead_name="Заявка: TG - @El_School_Ege_bot",
+        pipeline_triggers=(
+            ("Отправить номер",      10243538, 81078194),
+            ("Записываюсь на курс", 10243538, 81078194),
+        ),
+    ),
     "el_connect_bot": BotConfig(
         pipeline_id=4423755,
         status_id=79839682,
@@ -170,7 +179,7 @@ _BOT_CONFIGS: dict[str, BotConfig] = {
     ),
     "el_connetbot": BotConfig(
         pipeline_id=4423755,
-        status_id=79839682,
+        status_id=87768358,
         lead_name="Заявка: TG - СВЕТА РОП - Перегон",
         default_tags=(660360, 924857),  # telegram, tg_el_connetbot
     ),
