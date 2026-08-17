@@ -50,6 +50,10 @@ class BotConfig:
     # Маппинг: (lowercase-ключевое слово, tag_id в AmoCRM).
     # Если сообщение содержит ключевое слово — тег добавляется к сделке по ID.
     keywords: tuple[tuple[str, int], ...] = field(default=())
+    # Если задан — новая сделка создаётся только когда сообщение содержит
+    # хотя бы одно из этих слов (lowercase). Если диалог уже существует —
+    # сообщения доставляются в любом случае.
+    create_keywords: tuple[str, ...] = field(default=())
     # ID поля контакта для хранения platform_id.
     # None = дефолт (FIELD_TG_ID). Для Max нужно FIELD_MAX_USER_ID.
     platform_id_field: int | None = field(default=None)
@@ -120,6 +124,30 @@ _BOT_CONFIGS: dict[str, BotConfig] = {
         platform_id_field=settings.FIELD_MAX_USER_ID,
     ),
     # Instagram
+    "bio_el_oge": BotConfig(
+        pipeline_id=9472270,
+        status_id=75778594,
+        lead_name="Заявка: IG - bio_el_oge",
+        default_tags=(681886,),  # тег "instagram"
+        platform_id_field=settings.FIELD_IG_USERNAME,
+        create_keywords=("курс",),
+    ),
+    "russichka_oge_ell": BotConfig(
+        pipeline_id=9472270,
+        status_id=75778594,
+        lead_name="Заявка: IG - russichka_oge_ell",
+        default_tags=(681886,),  # тег "instagram"
+        platform_id_field=settings.FIELD_IG_USERNAME,
+        create_keywords=("курс",),
+    ),
+    "matematica_oge_ell": BotConfig(
+        pipeline_id=9472270,
+        status_id=75778594,
+        lead_name="Заявка: IG - matematica_oge_ell",
+        default_tags=(681886,),  # тег "instagram"
+        platform_id_field=settings.FIELD_IG_USERNAME,
+        create_keywords=("курс",),
+    ),
     "mikhail_matematik": BotConfig(
         pipeline_id=settings.AMOCRM_PIPELINE_ID_IG_MIKHAIL,
         status_id=settings.AMOCRM_STATUS_ID_IG_MIKHAIL,
@@ -162,7 +190,7 @@ _BOT_CONFIGS: dict[str, BotConfig] = {
             ("Отправить телефон", 10243538, 81078194),
         ),
     ),
-    "el_school_ege_bot": BotConfig(
+    "El_School_Ege_bot": BotConfig(
         pipeline_id=10195498,
         status_id=80731234,
         lead_name="Заявка: TG - @El_School_Ege_bot",

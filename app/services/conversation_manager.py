@@ -168,6 +168,22 @@ class ConversationManager:
                 current_lead = lead
 
         if not conversation:
+            # Для ботов с create_keywords создаём сделку только при наличии ключевого слова.
+            bot_config = get_bot_config(bot_name)
+            if bot_config.create_keywords:
+                text_lower = (message_text or "").lower()
+                matched = any(kw in text_lower for kw in bot_config.create_keywords)
+                if not matched:
+                    logger.info(
+                        "Skipping conversation creation: no required keyword in message "
+                        "for bot=%s, platform_id=%s, keywords=%s, text=%r",
+                        bot_name,
+                        platform_id,
+                        bot_config.create_keywords,
+                        (message_text or "")[:60],
+                    )
+                    return None
+
             logger.info(
                 "No conversation found for platform_id=%s, bot=%s — creating new",
                 platform_id,
