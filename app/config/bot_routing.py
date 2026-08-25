@@ -174,6 +174,14 @@ _BOT_CONFIGS: dict[str, BotConfig] = {
         default_tags=(656132,),  # тег "vk"
         platform_id_field=settings.FIELD_VK_ID,
     ),
+    "skidki_el_bot": BotConfig(
+        pipeline_id=10195498,
+        status_id=80731234,
+        lead_name="Заявка: TG - @skidki_el_bot",
+        pipeline_triggers=(
+            ("Вызвать менеджера", 9472270, 75778594),
+        ),
+    ),
     "demo2_el_bot": BotConfig(
         pipeline_id=settings.AMOCRM_PIPELINE_ID,
         status_id=settings.AMOCRM_STATUS_ID,
