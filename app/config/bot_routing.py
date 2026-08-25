@@ -90,6 +90,13 @@ _BOT_CONFIGS: dict[str, BotConfig] = {
         ),
     ),
     # Max messenger
+    "409020925": BotConfig(
+        pipeline_id=4423755,
+        status_id=87906726,
+        lead_name="Заявка: Мах - Алиса РОП - Перегон",
+        platform_id_field=settings.FIELD_MAX_USER_ID,
+        default_tags=(914873, 926819),  # max, el_gettouch_bot
+    ),
     "258057137": BotConfig(
         pipeline_id=4423755,
         status_id=79839682,
@@ -198,6 +205,12 @@ _BOT_CONFIGS: dict[str, BotConfig] = {
             ("Отправить номер",      10243538, 81078194),
             ("Записываюсь на курс", 10243538, 81078194),
         ),
+    ),
+    "el_gettouch_bot": BotConfig(
+        pipeline_id=4423755,
+        status_id=87906726,
+        lead_name="Заявка: TG - Алиса РОП - Перегон",
+        default_tags=(660360, 926819),  # telegram, el_gettouch_bot
     ),
     "el_connect_bot": BotConfig(
         pipeline_id=4423755,
