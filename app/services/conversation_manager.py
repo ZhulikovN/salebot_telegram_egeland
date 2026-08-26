@@ -930,6 +930,8 @@ class ConversationManager:
                     "Failed to proxy media, sending text only: url=%s",
                     media_url,
                 )
+                # Уведомляем менеджера: медиафайл не дошёл до клиента.
+                await self._notify_manager_media_failed(conversation_id)
 
         await self.salebot.send_message(
             client_id=conversation.salebot_client_id,
@@ -1010,9 +1012,95 @@ class ConversationManager:
                 message_type,
                 e,
             )
+            if "blocked by the user" in str(e).lower():
+                await self._notify_manager_bot_blocked(conversation.conversation_id)
             return False
 
         return True
+
+    async def _notify_manager_media_failed(self, conversation_id: str) -> None:
+        """
+        Отправить системное уведомление в amojo-чат когда медиафайл не удалось
+        доставить клиенту.
+
+        Уведомление видит менеджер прямо в переписке AmoCRM и понимает,
+        что нужно отправить файл повторно.
+
+        Args:
+            conversation_id: UUID чата в amojo
+        """
+        try:
+            await self.amojo.send_incoming_message(
+                conversation_id=conversation_id,
+                msgid=f"sys:{uuid4().hex}",
+                sender_id="system:media_error",
+                sender_name="Система",
+                text=(
+                    "[!] Медиафайл не удалось доставить клиенту "
+                    "(ошибка загрузки файла с серверов AmoCRM). "
+                    "Пожалуйста, отправьте его повторно."
+                ),
+                silent=True,
+            )
+            logger.info(
+                "Media failure notification sent to manager: conversation=%s",
+                conversation_id,
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to send media failure notification: conversation=%s, error=%s",
+                conversation_id,
+                e,
+            )
+
+    async def _notify_manager_bot_blocked(self, conversation_id: str) -> None:
+        """
+        Отправить системное уведомление в amojo-чат, что клиент заблокировал
+        бота в Telegram.
+
+        Определяется по ответу Telegram Bot API через relay: "403: Forbidden:
+        bot was blocked by the user". В этом случае сообщения клиенту не
+        доставляются никаким методом (ни sendPhoto, ни sendDocument и т.д.),
+        поэтому менеджеру нет смысла пытаться отправлять файлы повторно.
+
+        Не шлёт повторно чаще раза в сутки на один диалог (иначе чат
+        зафлудится одинаковыми уведомлениями при каждой попытке отправки).
+
+        Args:
+            conversation_id: UUID чата в amojo
+        """
+        try:
+            redis = get_redis()
+            dedup_key = f"notified:bot_blocked:{conversation_id}"
+            just_set = await redis.set(dedup_key, "1", nx=True, ex=86400)
+            if not just_set:
+                logger.debug(
+                    "Bot-blocked notification already sent recently, skipping: conversation=%s",
+                    conversation_id,
+                )
+                return
+
+            await self.amojo.send_incoming_message(
+                conversation_id=conversation_id,
+                msgid=f"sys:{uuid4().hex}",
+                sender_id="system:bot_blocked",
+                sender_name="Система",
+                text=(
+                    "[!] Клиент заблокировал бота в Telegram. "
+                    "Сообщения ему не доставляются, пока он не разблокирует бота."
+                ),
+                silent=True,
+            )
+            logger.info(
+                "Bot-blocked notification sent to manager: conversation=%s",
+                conversation_id,
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to send bot-blocked notification: conversation=%s, error=%s",
+                conversation_id,
+                e,
+            )
 
     async def close(self) -> None:
         """Закрыть все соединения."""
