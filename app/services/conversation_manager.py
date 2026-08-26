@@ -931,7 +931,7 @@ class ConversationManager:
                     media_url,
                 )
                 # Уведомляем менеджера: медиафайл не дошёл до клиента.
-                await self._notify_manager_media_failed(conversation_id)
+                await self._notify_manager_media_failed(conversation_id, conversation.lead_id)
 
         await self.salebot.send_message(
             client_id=conversation.salebot_client_id,
@@ -1012,92 +1012,157 @@ class ConversationManager:
                 message_type,
                 e,
             )
-            if "blocked by the user" in str(e).lower():
-                await self._notify_manager_bot_blocked(conversation.conversation_id)
+            error_text = str(e).lower()
+            if "blocked by the user" in error_text:
+                await self._notify_manager_bot_blocked(conversation.conversation_id, conversation.lead_id)
+            elif "voice_messages_forbidden" in error_text:
+                await self._notify_manager_voice_forbidden(conversation.conversation_id, conversation.lead_id)
             return False
 
         return True
 
-    async def _notify_manager_media_failed(self, conversation_id: str) -> None:
+    async def _notify_manager_media_failed(
+        self, conversation_id: str, lead_id: int | None
+    ) -> None:
         """
-        Отправить системное уведомление в amojo-чат когда медиафайл не удалось
-        доставить клиенту.
-
-        Уведомление видит менеджер прямо в переписке AmoCRM и понимает,
-        что нужно отправить файл повторно.
+        Добавить примечание к сделке когда медиафайл не удалось доставить клиенту.
 
         Args:
-            conversation_id: UUID чата в amojo
+            conversation_id: UUID чата в amojo (для логов)
+            lead_id: ID сделки в AmoCRM
         """
+        if not lead_id:
+            logger.warning(
+                "Cannot add media-failed note: no lead_id for conversation=%s",
+                conversation_id,
+            )
+            return
         try:
-            await self.amojo.send_incoming_message(
-                conversation_id=conversation_id,
-                msgid=f"sys:{uuid4().hex}",
-                sender_id="system:media_error",
-                sender_name="Система",
+            await self.amocrm.add_lead_note(
+                lead_id=lead_id,
                 text=(
                     "[!] Медиафайл не удалось доставить клиенту "
                     "(ошибка загрузки файла с серверов AmoCRM). "
                     "Пожалуйста, отправьте его повторно."
                 ),
-                silent=True,
             )
             logger.info(
-                "Media failure notification sent to manager: conversation=%s",
+                "Media failure note added to lead=%s (conversation=%s)",
+                lead_id,
                 conversation_id,
             )
         except Exception as e:
             logger.error(
-                "Failed to send media failure notification: conversation=%s, error=%s",
+                "Failed to add media failure note: lead=%s, conversation=%s, error=%s",
+                lead_id,
                 conversation_id,
                 e,
             )
 
-    async def _notify_manager_bot_blocked(self, conversation_id: str) -> None:
+    async def _notify_manager_bot_blocked(
+        self, conversation_id: str, lead_id: int | None
+    ) -> None:
         """
-        Отправить системное уведомление в amojo-чат, что клиент заблокировал
-        бота в Telegram.
+        Добавить примечание к сделке: клиент заблокировал бота в Telegram.
 
         Определяется по ответу Telegram Bot API через relay: "403: Forbidden:
-        bot was blocked by the user". В этом случае сообщения клиенту не
-        доставляются никаким методом (ни sendPhoto, ни sendDocument и т.д.),
-        поэтому менеджеру нет смысла пытаться отправлять файлы повторно.
+        bot was blocked by the user".
 
-        Не шлёт повторно чаще раза в сутки на один диалог (иначе чат
-        зафлудится одинаковыми уведомлениями при каждой попытке отправки).
+        Не добавляет примечание чаще раза в сутки на один диалог.
 
         Args:
-            conversation_id: UUID чата в amojo
+            conversation_id: UUID чата в amojo (для dedup-ключа и логов)
+            lead_id: ID сделки в AmoCRM
         """
+        if not lead_id:
+            logger.warning(
+                "Cannot add bot-blocked note: no lead_id for conversation=%s",
+                conversation_id,
+            )
+            return
         try:
             redis = get_redis()
             dedup_key = f"notified:bot_blocked:{conversation_id}"
             just_set = await redis.set(dedup_key, "1", nx=True, ex=86400)
             if not just_set:
                 logger.debug(
-                    "Bot-blocked notification already sent recently, skipping: conversation=%s",
+                    "Bot-blocked note already added recently, skipping: conversation=%s",
                     conversation_id,
                 )
                 return
 
-            await self.amojo.send_incoming_message(
-                conversation_id=conversation_id,
-                msgid=f"sys:{uuid4().hex}",
-                sender_id="system:bot_blocked",
-                sender_name="Система",
+            await self.amocrm.add_lead_note(
+                lead_id=lead_id,
                 text=(
                     "[!] Клиент заблокировал бота в Telegram. "
                     "Сообщения ему не доставляются, пока он не разблокирует бота."
                 ),
-                silent=True,
             )
             logger.info(
-                "Bot-blocked notification sent to manager: conversation=%s",
+                "Bot-blocked note added to lead=%s (conversation=%s)",
+                lead_id,
                 conversation_id,
             )
         except Exception as e:
             logger.error(
-                "Failed to send bot-blocked notification: conversation=%s, error=%s",
+                "Failed to add bot-blocked note: lead=%s, conversation=%s, error=%s",
+                lead_id,
+                conversation_id,
+                e,
+            )
+
+    async def _notify_manager_voice_forbidden(
+        self, conversation_id: str, lead_id: int | None
+    ) -> None:
+        """
+        Добавить примечание к сделке: клиент запретил приём голосовых сообщений.
+
+        Определяется по ответу Telegram Bot API через relay: "400: Bad
+        Request: VOICE_MESSAGES_FORBIDDEN" — клиент в настройках приватности
+        Telegram отключил приём голосовых от ботов/незнакомых аккаунтов.
+        Другие типы сообщений (текст, фото, видео, файлы) при этом
+        доставляются нормально — запрет касается только голосовых.
+
+        Не добавляет примечание чаще раза в сутки на один диалог.
+
+        Args:
+            conversation_id: UUID чата в amojo (для dedup-ключа и логов)
+            lead_id: ID сделки в AmoCRM
+        """
+        if not lead_id:
+            logger.warning(
+                "Cannot add voice-forbidden note: no lead_id for conversation=%s",
+                conversation_id,
+            )
+            return
+        try:
+            redis = get_redis()
+            dedup_key = f"notified:voice_forbidden:{conversation_id}"
+            just_set = await redis.set(dedup_key, "1", nx=True, ex=86400)
+            if not just_set:
+                logger.debug(
+                    "Voice-forbidden note already added recently, skipping: conversation=%s",
+                    conversation_id,
+                )
+                return
+
+            await self.amocrm.add_lead_note(
+                lead_id=lead_id,
+                text=(
+                    "[!] Клиент запретил приём голосовых сообщений в Telegram "
+                    "(настройки приватности). Отправьте текст, фото или файл "
+                    "вместо голосового — они доставляются без ограничений."
+                ),
+            )
+            logger.info(
+                "Voice-forbidden note added to lead=%s (conversation=%s)",
+                lead_id,
+                conversation_id,
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to add voice-forbidden note: lead=%s, conversation=%s, error=%s",
+                lead_id,
                 conversation_id,
                 e,
             )

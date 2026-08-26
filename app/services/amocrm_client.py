@@ -966,6 +966,32 @@ class AmoCRMClient:
         except Exception as e:
             logger.warning("Failed to add tag id=%s to lead %s: %s", tag_id, lead_id, e)
 
+    async def add_lead_note(self, lead_id: int, text: str) -> None:
+        """
+        Добавить примечание (заметку) к сделке.
+
+        Примечания отображаются в ленте активности сделки (вкладка «Примечания»)
+        и видны всем менеджерам, работающим с этой сделкой.
+
+        Args:
+            lead_id: ID сделки
+            text: Текст примечания
+        """
+        logger.info("Adding note to lead %s: %r", lead_id, text[:80])
+        try:
+            await self._make_request(
+                "POST",
+                "/leads/notes",
+                data=[{
+                    "entity_id": lead_id,
+                    "note_type": "common",
+                    "params": {"text": text},
+                }],
+            )
+            logger.info("Note added to lead %s", lead_id)
+        except Exception as e:
+            logger.warning("Failed to add note to lead %s: %s", lead_id, e)
+
     async def create_task(
         self,
         lead_id: int,
