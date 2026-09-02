@@ -2,7 +2,7 @@
 import logging
 from uuid import uuid4
 
-from app.config.bot_routing import get_bot_config
+from app.config.bot_routing import SALEBOT_PRO_TAG_ID, get_bot_config
 from app.db.storage import Conversation, get_conversation_storage
 from app.services.amocrm_client import AmoCRMClient, RetryableAmoCRMError
 from app.services.amojo_client import AmojoClient, AmojoNotFoundError
@@ -431,6 +431,9 @@ class ConversationManager:
                 variables={"amo_lead_id": str(lead_id)},
             )
 
+            # Ставим универсальный тег интеграции на каждую сделку
+            await self.amocrm.add_lead_tag(lead_id, SALEBOT_PRO_TAG_ID)
+
             # Ставим default_tags на сделку (теги, заданные в конфиге бота)
             if bot_config.default_tags:
                 for tag_id in bot_config.default_tags:
@@ -626,6 +629,9 @@ class ConversationManager:
                 client_id=salebot_client_id,
                 variables={"amo_lead_id": str(lead_id)},
             )
+
+            # Ставим универсальный тег интеграции на каждую сделку
+            await self.amocrm.add_lead_tag(lead_id, SALEBOT_PRO_TAG_ID)
 
             if bot_config.default_tags:
                 for tag_id in bot_config.default_tags:
