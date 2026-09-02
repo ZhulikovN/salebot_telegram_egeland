@@ -1,0 +1,19 @@
+[Unit]
+Description=Salebot ↔ amoCRM UTM Backfill Worker (egeland)
+After=network.target
+
+[Service]
+User=ubuntu
+Group=ubuntu
+
+EnvironmentFile=/home/ubuntu/salebot_telegram_egeland/current/.env
+
+WorkingDirectory=/home/ubuntu/salebot_telegram_egeland/current
+
+ExecStart=/home/ubuntu/.cache/pypoetry/virtualenvs/salebot-telegram-egeland-efy7SSHF-py3.12/bin/python -m app.workers.utm_backfill_worker
+
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

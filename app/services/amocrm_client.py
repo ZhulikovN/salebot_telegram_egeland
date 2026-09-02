@@ -733,6 +733,49 @@ class AmoCRMClient:
             logger.error("Error updating lead: %s", e)
             raise
 
+    async def fill_missing_utm_fields(self, lead_id: int, utm_data: dict) -> bool:
+        """
+        Дозаполнить пустые UTM-поля сделки (first-touch: не перезаписывает уже заполненные).
+
+        Args:
+            lead_id: ID сделки
+            utm_data: UTM-метки {"utm_source": ..., "utm_medium": ..., ...}
+
+        Returns:
+            True если после этого вызова ВСЕ 5 UTM-полей заполнены (можно больше
+            не проверять эту сделку), False если что-то ещё осталось пустым.
+        """
+        utm_field_map = {
+            settings.FIELD_UTM_SOURCE:   utm_data.get("utm_source"),
+            settings.FIELD_UTM_MEDIUM:   utm_data.get("utm_medium"),
+            settings.FIELD_UTM_CAMPAIGN: utm_data.get("utm_campaign"),
+            settings.FIELD_UTM_TERM:     utm_data.get("utm_term"),
+            settings.FIELD_UTM_CONTENT:  utm_data.get("utm_content"),
+        }
+
+        try:
+            lead_response = await self._make_request("GET", f"/leads/{lead_id}")
+            existing = self._parse_custom_fields(lead_response.get("custom_fields_values"))
+
+            fields_to_update = {
+                field_id: value
+                for field_id, value in utm_field_map.items()
+                if value and not existing.get(field_id)
+            }
+
+            if fields_to_update:
+                await self.update_lead(lead_id, fields_to_update)
+                logger.info("UTM fields filled for lead %s: %s", lead_id, fields_to_update)
+
+            all_filled = all(
+                existing.get(field_id) or fields_to_update.get(field_id)
+                for field_id in utm_field_map
+            )
+            return all_filled
+        except Exception as e:
+            logger.warning("Failed to fill UTM fields for lead %s: %s", lead_id, e)
+            return False
+
     async def create_chat_in_amojo(
         self,
         conversation_id: str,

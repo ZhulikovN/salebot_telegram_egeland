@@ -254,9 +254,11 @@ async def process_salebot_message(data: dict) -> None:
                             utm_data=msg.get("utm_data"),
                         )
                         if conversation_id is None:
-                            raise RuntimeError(
-                                f"handle_salebot_message returned None for platform_id={msg['platform_id']}, "
-                                f"bot={msg['bot_name']} — message not delivered"
+                            logger.info(
+                                "handle_salebot_message returned None for platform_id=%s, bot=%s "
+                                "— message skipped (no keyword match or creation error)",
+                                msg["platform_id"],
+                                msg["bot_name"],
                             )
                         logger.debug(
                             "Salebot message processed: conversation_id=%s",

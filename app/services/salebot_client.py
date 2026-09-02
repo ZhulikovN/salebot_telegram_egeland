@@ -276,6 +276,58 @@ class SalebotClient:
             logger.error("Error loading Salebot client: %s", e)
             raise
 
+    async def get_variables(self, client_id: int) -> dict[str, Any]:
+        """
+        Получить текущие переменные клиента из Salebot.
+
+        GET https://chatter.salebot.pro/api/{API_KEY}/get_variables?client_id={CLIENT_ID}
+
+        Возвращает актуальный снимок переменных на момент запроса (в отличие от
+        данных вебхука, которые фиксируют состояние на момент входящего сообщения).
+        Используется для дозаполнения UTM-меток, которые Salebot мог выставить
+        позже первого сообщения.
+
+        Требует у API-ключа право "Разрешение на чтение информации о клиентах".
+
+        Args:
+            client_id: salebot_client_id (client.id из вебхука, НЕ platform_id!)
+
+        Returns:
+            Словарь переменных клиента (плоский JSON, ключи — имена переменных)
+
+        Raises:
+            aiohttp.ClientError: При ошибке запроса
+        """
+        logger.debug("Getting Salebot variables: client_id=%s", client_id)
+
+        url = f"{self.base_url}/get_variables"
+        params = {"client_id": client_id}
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url, params=params, timeout=aiohttp.ClientTimeout(total=15)
+                ) as response:
+                    text = await response.text()
+
+                    if response.status >= 400:
+                        logger.warning(
+                            "Salebot get_variables error %s: %s", response.status, text[:200]
+                        )
+                        raise aiohttp.ClientError(
+                            f"Salebot API error {response.status}: {text}"
+                        )
+
+                    try:
+                        return json.loads(text)
+                    except json.JSONDecodeError:
+                        logger.warning("Salebot get_variables returned non-JSON: %s", text[:200])
+                        return {}
+
+        except Exception as e:
+            logger.warning("Error getting Salebot variables (client_id=%s): %s", client_id, e)
+            raise
+
     async def save_variables(
         self,
         client_id: int,

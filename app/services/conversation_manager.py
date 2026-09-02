@@ -4,7 +4,7 @@ from uuid import uuid4
 
 from app.config.bot_routing import get_bot_config
 from app.db.storage import Conversation, get_conversation_storage
-from app.services.amocrm_client import AmoCRMClient
+from app.services.amocrm_client import AmoCRMClient, RetryableAmoCRMError
 from app.services.amojo_client import AmojoClient, AmojoNotFoundError
 from app.services.media_proxy import download_and_proxy, download_media_bytes
 from app.services.salebot_client import SalebotClient
@@ -24,6 +24,18 @@ logger = logging.getLogger(__name__)
 # файлом без превью. Если расширение явно видео — переопределяем тип, чтобы
 # сначала пробовался sendVideo.
 _VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".3gp"}
+
+
+def _is_valid_media_url(value: str) -> bool:
+    """
+    Проверить, что значение похоже на настоящую ссылку на файл.
+
+    Salebot иногда кладёт в attachments не ссылку, а текстовую заглушку
+    (например "File is too big", если клиентский файл превысил лимит
+    размера самого Salebot) — такие значения нельзя пересылать в amojo как
+    media_url, amojo их отвергает с ошибкой валидации.
+    """
+    return isinstance(value, str) and value.startswith(("http://", "https://"))
 
 
 
@@ -230,75 +242,54 @@ class ConversationManager:
 
         attachments = attachments or []
 
-        # Отправляем текст и вложения; при AmojoNotFoundError (чат удалён вручную в AmoCRM)
-        # выполняем fallback: пересоздаём чат и повторяем отправку.
-        try:
-            if message_text:
-                await self.amojo.send_incoming_message(
-                    conversation_id=conversation.conversation_id,
-                    msgid=f"salebot:{uuid4().hex}",
-                    sender_id=f"tg:{platform_id}",
-                    sender_name=client_name,
-                    text=message_text,
-                    silent=False,
+        # Отфильтровываем значения, которые не похожи на настоящую ссылку
+        # (например, заглушку "File is too big" от Salebot) — их даже не
+        # пытаемся слать в amojo.
+        valid_attachments = []
+        for media_url in attachments:
+            if _is_valid_media_url(media_url):
+                valid_attachments.append(media_url)
+            else:
+                logger.warning(
+                    "Skipping invalid attachment (not a URL): platform_id=%s, "
+                    "conversation=%s, value=%r",
+                    platform_id,
+                    conversation.conversation_id,
+                    media_url,
                 )
-                await self.storage.increment_message_count(conversation.conversation_id)
 
-            for media_url in attachments:
-                await self.amojo.send_incoming_message(
-                    conversation_id=conversation.conversation_id,
-                    msgid=f"salebot:{uuid4().hex}",
-                    sender_id=f"tg:{platform_id}",
-                    sender_name=client_name,
-                    text="",
-                    silent=False,
-                    media_url=media_url,
-                )
-                await self.storage.increment_message_count(conversation.conversation_id)
-
-        except AmojoNotFoundError:
-            # Чат был удалён вручную в AmoCRM — пересоздаём и повторяем.
-            logger.warning(
-                "Amojo chat not found for conversation=%s, recreating (platform_id=%s, bot=%s)",
-                conversation.conversation_id,
-                platform_id,
-                bot_name,
-            )
-            conversation = await self._recreate_amojo_chat(
+        if message_text:
+            conversation = await self._send_amojo_message(
                 conversation=conversation,
                 platform_id=platform_id,
                 bot_name=bot_name,
                 client_name=client_name,
                 tg_username=tg_username,
+                text=message_text,
             )
-            if not conversation:
-                raise RuntimeError(
-                    f"Failed to recreate amojo chat for platform_id={platform_id}, bot={bot_name} "
-                    f"— message not delivered"
-                )
 
-            if message_text:
-                await self.amojo.send_incoming_message(
-                    conversation_id=conversation.conversation_id,
-                    msgid=f"salebot:{uuid4().hex}",
-                    sender_id=f"tg:{platform_id}",
-                    sender_name=client_name,
-                    text=message_text,
-                    silent=False,
-                )
-                await self.storage.increment_message_count(conversation.conversation_id)
-
-            for media_url in attachments:
-                await self.amojo.send_incoming_message(
-                    conversation_id=conversation.conversation_id,
-                    msgid=f"salebot:{uuid4().hex}",
-                    sender_id=f"tg:{platform_id}",
-                    sender_name=client_name,
+        for media_url in valid_attachments:
+            try:
+                conversation = await self._send_amojo_message(
+                    conversation=conversation,
+                    platform_id=platform_id,
+                    bot_name=bot_name,
+                    client_name=client_name,
+                    tg_username=tg_username,
                     text="",
-                    silent=False,
                     media_url=media_url,
                 )
-                await self.storage.increment_message_count(conversation.conversation_id)
+            except AmojoNotFoundError as e:
+                # Ошибка валидации самого сообщения (например, amojo отверг
+                # ссылку) — чат тут ни при чём, пересоздавать его бессмысленно.
+                # Пропускаем это вложение, не роняя обработку остальных
+                # сообщений батча.
+                logger.error(
+                    "Attachment rejected by amojo, skipping: conversation=%s, url=%s, error=%s",
+                    conversation.conversation_id,
+                    media_url,
+                    e,
+                )
 
         if not message_text and not attachments:
             logger.warning(
@@ -485,6 +476,8 @@ class ConversationManager:
             return conversation
 
         except Exception as e:
+            if any(code in str(e) for code in ("502", "503", "504")):
+                raise RetryableAmoCRMError(str(e)) from e
             logger.error(
                 "Error creating new conversation for platform_id=%s: %s",
                 platform_id,
@@ -651,6 +644,8 @@ class ConversationManager:
             return await self.storage.get_by_platform_id(platform_id, bot_name)
 
         except Exception as e:
+            if any(code in str(e) for code in ("502", "503", "504")):
+                raise RetryableAmoCRMError(str(e)) from e
             logger.error(
                 "Error reopening conversation for platform_id=%s, bot=%s: %s",
                 platform_id,
@@ -711,6 +706,8 @@ class ConversationManager:
             return await self.storage.get_by_platform_id(platform_id, bot_name)
 
         except Exception as e:
+            if any(code in str(e) for code in ("502", "503", "504")):
+                raise RetryableAmoCRMError(str(e)) from e
             logger.error(
                 "Error recreating amojo chat for platform_id=%s, bot=%s: %s",
                 platform_id,
@@ -794,37 +791,7 @@ class ConversationManager:
             lead_id: ID сделки
             utm_data: UTM-метки из Salebot
         """
-        try:
-            lead_response = await self.amocrm._make_request("GET", f"/leads/{lead_id}")
-            existing = self.amocrm._parse_custom_fields(
-                lead_response.get("custom_fields_values")
-            )
-
-            utm_field_map = {
-                settings.FIELD_UTM_SOURCE:   utm_data.get("utm_source"),
-                settings.FIELD_UTM_MEDIUM:   utm_data.get("utm_medium"),
-                settings.FIELD_UTM_CAMPAIGN: utm_data.get("utm_campaign"),
-                settings.FIELD_UTM_TERM:     utm_data.get("utm_term"),
-                settings.FIELD_UTM_CONTENT:  utm_data.get("utm_content"),
-            }
-
-            fields_to_update = {
-                field_id: value
-                for field_id, value in utm_field_map.items()
-                if value and not existing.get(field_id)
-            }
-
-            if fields_to_update:
-                await self.amocrm.update_lead(lead_id, fields_to_update)
-                logger.info(
-                    "UTM first-touch updated for duplicate lead %s: %s",
-                    lead_id,
-                    fields_to_update,
-                )
-            else:
-                logger.debug("UTM fields already filled for lead %s, skipping", lead_id)
-        except Exception as e:
-            logger.warning("Failed to update UTM for lead %s: %s", lead_id, e)
+        await self.amocrm.fill_missing_utm_fields(lead_id, utm_data)
 
     async def handle_bot_message(
         self,
@@ -1020,6 +987,91 @@ class ConversationManager:
             return False
 
         return True
+
+    async def _send_amojo_message(
+        self,
+        conversation: Conversation,
+        platform_id: str,
+        bot_name: str,
+        client_name: str,
+        tg_username: str | None,
+        text: str,
+        media_url: str | None = None,
+    ) -> Conversation:
+        """
+        Отправить одно сообщение (текст или вложение) в amojo с авто-восстановлением чата.
+
+        При AmojoNotFoundError различаем два случая по тексту ошибки:
+        - Реальный "чат не найден" (чат удалён вручную в AmoCRM) — пересоздаём
+          чат и повторяем отправку один раз.
+        - VALIDATION_ERROR (например, amojo отверг media_url) — проблема в
+          самом сообщении, а не в чате. Пересоздание чата тут не поможет и
+          только тратит время — поднимаем ошибку выше без пересоздания,
+          чтобы вызывающий код мог пропустить именно это сообщение.
+
+        Args:
+            conversation: Текущая запись диалога
+            platform_id: Telegram ID клиента
+            bot_name: Название бота
+            client_name: Имя клиента
+            tg_username: Telegram username (без @)
+            text: Текст сообщения (может быть пустым для чистого вложения)
+            media_url: URL вложения (опционально)
+
+        Returns:
+            Актуальная запись Conversation (изменится, если чат был пересоздан)
+
+        Raises:
+            AmojoNotFoundError: если это VALIDATION_ERROR, а не "чат не найден"
+            RuntimeError: если пересоздание чата не помогло
+        """
+        try:
+            await self.amojo.send_incoming_message(
+                conversation_id=conversation.conversation_id,
+                msgid=f"salebot:{uuid4().hex}",
+                sender_id=f"tg:{platform_id}",
+                sender_name=client_name,
+                text=text,
+                silent=False,
+                media_url=media_url,
+            )
+            await self.storage.increment_message_count(conversation.conversation_id)
+            return conversation
+
+        except AmojoNotFoundError as e:
+            if "VALIDATION_ERROR" in str(e):
+                raise
+
+            logger.warning(
+                "Amojo chat not found for conversation=%s, recreating (platform_id=%s, bot=%s)",
+                conversation.conversation_id,
+                platform_id,
+                bot_name,
+            )
+            recreated = await self._recreate_amojo_chat(
+                conversation=conversation,
+                platform_id=platform_id,
+                bot_name=bot_name,
+                client_name=client_name,
+                tg_username=tg_username,
+            )
+            if not recreated:
+                raise RuntimeError(
+                    f"Failed to recreate amojo chat for platform_id={platform_id}, bot={bot_name} "
+                    f"— message not delivered"
+                )
+
+            await self.amojo.send_incoming_message(
+                conversation_id=recreated.conversation_id,
+                msgid=f"salebot:{uuid4().hex}",
+                sender_id=f"tg:{platform_id}",
+                sender_name=client_name,
+                text=text,
+                silent=False,
+                media_url=media_url,
+            )
+            await self.storage.increment_message_count(recreated.conversation_id)
+            return recreated
 
     async def _notify_manager_media_failed(
         self, conversation_id: str, lead_id: int | None

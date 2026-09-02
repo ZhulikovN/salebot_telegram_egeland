@@ -1,6 +1,6 @@
 """Хранилище для маппинга диалогов Salebot ↔ amoCRM."""
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import Index, Integer, String, Text, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -374,6 +374,31 @@ class ConversationStorage:
                 new_conversation_id,
             )
             return True
+
+    async def get_recent_with_lead(self, max_age_hours: int = 2) -> list["Conversation"]:
+        """
+        Получить диалоги с привязанной сделкой, созданные не позднее max_age_hours назад.
+
+        Используется фоновым воркером дозаполнения UTM: окно само "сдвигается" —
+        диалоги старше max_age_hours перестают попадать в выборку и больше не
+        проверяются, независимо от того, удалось ли дозаполнить UTM или нет.
+
+        Args:
+            max_age_hours: Возраст диалога в часах, дальше которого не проверяем
+
+        Returns:
+            Список диалогов с lead_id, созданных в пределах окна
+        """
+        cutoff = datetime.now() - timedelta(hours=max_age_hours)
+
+        async with self.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(Conversation).where(
+                    Conversation.created_at >= cutoff,
+                    Conversation.lead_id.is_not(None),
+                )
+            )
+            return list(result.scalars().all())
 
     async def close(self) -> None:
         """Закрыть все соединения с БД."""

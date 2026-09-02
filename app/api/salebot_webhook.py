@@ -83,6 +83,14 @@ async def salebot_webhook(webhook: SalebotWebhook, request: Request) -> dict[str
             msg_preview,
         )
 
+        if not is_bot:
+            logger.info(
+                "UTM_TRACE: platform_id=%s, bot=%s, utm=%s",
+                webhook.platform_id,
+                webhook.bot_name,
+                webhook.utm_data,
+            )
+
         queue_name = "tasks:bot" if is_bot else "tasks:priority"
         await push_task(
             "salebot_message",
