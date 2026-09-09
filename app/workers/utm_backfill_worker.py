@@ -60,14 +60,29 @@ def handle_shutdown_signal(signum: int, frame: Any) -> None:
     shutdown_requested = True
 
 
+_SALEBOT_EMPTY_VALUES = {"none", "null", "undefined", ""}
+
+
+def _normalize_utm_value(val: object) -> str | None:
+    """Вернуть значение UTM или None, если Salebot прислал заглушку."""
+    if val is None:
+        return None
+    s = str(val).strip()
+    return None if s.lower() in _SALEBOT_EMPTY_VALUES else s
+
+
 def _extract_utm(variables: dict) -> dict[str, str | None]:
-    """Достать UTM-поля из плоского ответа Salebot get_variables."""
+    """Достать UTM-поля из плоского ответа Salebot get_variables.
+
+    Фильтрует строки-заглушки ("None", "null", "undefined", ""),
+    которые Salebot присылает для незаполненных переменных.
+    """
     return {
-        "utm_source": variables.get("utm_source"),
-        "utm_medium": variables.get("utm_medium"),
-        "utm_campaign": variables.get("utm_campaign"),
-        "utm_term": variables.get("utm_term"),
-        "utm_content": variables.get("utm_content"),
+        "utm_source":   _normalize_utm_value(variables.get("utm_source")),
+        "utm_medium":   _normalize_utm_value(variables.get("utm_medium")),
+        "utm_campaign": _normalize_utm_value(variables.get("utm_campaign")),
+        "utm_term":     _normalize_utm_value(variables.get("utm_term")),
+        "utm_content":  _normalize_utm_value(variables.get("utm_content")),
     }
 
 
