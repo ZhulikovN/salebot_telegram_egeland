@@ -9,6 +9,7 @@ import json
 
 import aiohttp
 
+from app.services.amocrm_client import RetryableAmoCRMError
 from app.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -208,7 +209,7 @@ class AmojoClient:
                     if response.status >= 500:
                         text = await response.text()
                         logger.error("Amojo API error %s: %s", response.status, text)
-                        raise aiohttp.ClientError(f"Amojo API error {response.status}: {text}")
+                        raise RetryableAmoCRMError(f"Amojo API error {response.status}: {text}")
 
                     logger.info("Message sent to amojo: %s", response.status)
 

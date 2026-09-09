@@ -3,8 +3,9 @@ import logging
 
 from fastapi import APIRouter, Request
 
+from app.config.bot_routing import LOW_PRIORITY_BOT_NAMES
 from app.models.salebot import SalebotWebhook
-from app.workers.queue import push_task
+from app.workers.queue import LOW_PRIORITY_QUEUE, push_task
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -91,7 +92,15 @@ async def salebot_webhook(webhook: SalebotWebhook, request: Request) -> dict[str
                 webhook.utm_data,
             )
 
-        queue_name = "tasks:bot" if is_bot else "tasks:priority"
+        # Боты с массовыми рассылками (например, ВК) уходят в отдельную
+        # низкоприоритетную очередь — разбирается только когда
+        # tasks:priority/tasks:bot/tasks:global пусты, чтобы не блокировать
+        # остальные мессенджеры при высокой нагрузке.
+        if webhook.bot_name in LOW_PRIORITY_BOT_NAMES:
+            queue_name = LOW_PRIORITY_QUEUE
+        else:
+            queue_name = "tasks:bot" if is_bot else "tasks:priority"
+
         await push_task(
             "salebot_message",
             {

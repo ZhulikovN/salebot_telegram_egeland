@@ -9,6 +9,12 @@ from app.utils.redis_connection import get_redis
 
 logger = logging.getLogger(__name__)
 
+# Низкоприоритетная очередь для источников, которые не должны блокировать
+# обработку остальных мессенджеров при массовых рассылках (например, ВК).
+# BLPOP проверяет очереди в порядке списка — эта очередь идёт последней,
+# то есть разбирается только когда tasks:priority/tasks:bot/tasks:global пусты.
+LOW_PRIORITY_QUEUE = "tasks:vk_low"
+
 
 async def push_task(task_type: str, data: dict[str, Any], queue_name: str = "tasks:priority") -> None:
     """
@@ -57,7 +63,10 @@ async def pop_task(timeout: int = 5) -> dict[str, Any] | None:
     try:
         redis = get_redis()
         logger.info("POP_TASK: calling blpop with timeout=%d", timeout)
-        result = await redis.blpop(["tasks:priority", "tasks:bot", "tasks:global"], timeout=timeout)
+        result = await redis.blpop(
+            ["tasks:priority", "tasks:bot", "tasks:global", LOW_PRIORITY_QUEUE],
+            timeout=timeout,
+        )
         logger.info("POP_TASK: blpop returned: %s", "data" if result else "None")
 
         if result:
@@ -158,7 +167,8 @@ async def get_queue_size() -> int:
         redis = get_redis()
         priority = await redis.llen("tasks:priority")
         bot = await redis.llen("tasks:bot")
-        return priority + bot
+        low_priority = await redis.llen(LOW_PRIORITY_QUEUE)
+        return priority + bot + low_priority
     except Exception as e:
         logger.error("Failed to get queue size: %s", e)
         return 0
