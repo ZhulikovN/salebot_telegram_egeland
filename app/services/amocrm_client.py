@@ -757,10 +757,11 @@ class AmoCRMClient:
             lead_response = await self._make_request("GET", f"/leads/{lead_id}")
             existing = self._parse_custom_fields(lead_response.get("custom_fields_values"))
 
+            _EMPTY = {"none", "null", "undefined", ""}
             fields_to_update = {
                 field_id: value
                 for field_id, value in utm_field_map.items()
-                if value and not existing.get(field_id)
+                if value and str(value).strip().lower() not in _EMPTY and not existing.get(field_id)
             }
 
             if fields_to_update:
