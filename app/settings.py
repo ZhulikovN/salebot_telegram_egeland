@@ -23,6 +23,13 @@ class Settings(BaseSettings):
         description="Долгоживущий Bearer токен для API amoCRM"
     )
 
+    # Отдельная интеграция для utm_backfill_worker — свой client_id в AmoCRM,
+    # свои 7 req/sec, не делит бюджет с основным воркером.
+    UTM_AMO_ACCESS_TOKEN: str = Field(
+        default="",
+        description="Долгоживущий токен отдельной интеграции 'UTM Backfill' в amoCRM",
+    )
+
     # amoCRM OAuth2 (для специальных запросов)
     AMO_CLIENT_ID: str = Field(description="Client ID для OAuth2 интеграции")
     AMO_CLIENT_SECRET: str = Field(description="Client Secret для OAuth2 интеграции")
@@ -146,6 +153,12 @@ class Settings(BaseSettings):
     AMOCRM_MAX_REQUESTS_PER_SECOND: int = Field(
         default=5,
         description="Максимальное количество запросов к AmoCRM API в секунду",
+        ge=1,
+        le=10,
+    )
+    UTM_AMOCRM_MAX_REQUESTS_PER_SECOND: int = Field(
+        default=5,
+        description="Лимит req/sec для отдельной интеграции utm_backfill_worker",
         ge=1,
         le=10,
     )
