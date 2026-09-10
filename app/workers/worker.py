@@ -18,6 +18,7 @@ from typing import Any
 
 from app.services.amocrm_client import RetryableAmoCRMError
 from app.services.conversation_manager import ConversationManager
+from app.services.salebot_client import RetryableSalebotError
 from app.settings import settings
 from app.utils.redis_connection import get_redis
 from app.workers.queue import (
@@ -498,6 +499,27 @@ async def process_amojo_message(data: dict) -> None:
                         await push_conversation_message(conversation_id, msg)
                         logger.warning(
                             "Amojo message requeued (attempt %d/%d) due to temporary AmoCRM error: %s",
+                            retry_count + 1,
+                            _MAX_RETRY_ATTEMPTS,
+                            e,
+                        )
+                        has_retries = True
+
+                except RetryableSalebotError as e:
+                    retry_count = msg.get("_retry_count", 0)
+                    if retry_count >= _MAX_RETRY_ATTEMPTS:
+                        logger.error(
+                            "Amojo message dropped after %d retries (Salebot unavailable): %s",
+                            _MAX_RETRY_ATTEMPTS,
+                            e,
+                        )
+                        await redis.decr(counter_key)
+                        total_processed += 1
+                    else:
+                        msg["_retry_count"] = retry_count + 1
+                        await push_conversation_message(conversation_id, msg)
+                        logger.warning(
+                            "Amojo message requeued (attempt %d/%d) due to temporary Salebot error: %s",
                             retry_count + 1,
                             _MAX_RETRY_ATTEMPTS,
                             e,
