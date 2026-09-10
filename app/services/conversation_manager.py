@@ -6,7 +6,7 @@ import aiohttp
 
 from app.config.bot_routing import SALEBOT_PRO_TAG_ID, get_bot_config
 from app.db.storage import Conversation, get_conversation_storage
-from app.services.amocrm_client import AmoCRMClient, RetryableAmoCRMError
+from app.services.amocrm_client import AmoCRMClient, RateLimitAmoCRMError, RetryableAmoCRMError
 from app.services.amojo_client import AmojoClient, AmojoNotFoundError
 from app.services.media_proxy import download_and_proxy, download_media_bytes
 from app.services.salebot_client import SalebotClient
@@ -486,7 +486,14 @@ class ConversationManager:
             return conversation
 
         except Exception as e:
-            if any(code in str(e) for code in ("502", "503", "504")) or isinstance(e, aiohttp.ClientOSError):
+            # RateLimitAmoCRMError (429) — тоже временная ошибка, требует повтора через
+            # очередь (см. worker.py), а не молчаливой потери сообщения. Проверяем через
+            # isinstance, а не подстроку "429" в тексте — иначе можно случайно поймать
+            # 429 внутри произвольного id/сообщения об ошибке.
+            if (
+                any(code in str(e) for code in ("502", "503", "504"))
+                or isinstance(e, (aiohttp.ClientOSError, RateLimitAmoCRMError))
+            ):
                 raise RetryableAmoCRMError(str(e)) from e
             logger.error(
                 "Error creating new conversation for platform_id=%s: %s",
@@ -664,7 +671,14 @@ class ConversationManager:
             return await self.storage.get_by_platform_id(platform_id, bot_name)
 
         except Exception as e:
-            if any(code in str(e) for code in ("502", "503", "504")) or isinstance(e, aiohttp.ClientOSError):
+            # RateLimitAmoCRMError (429) — тоже временная ошибка, требует повтора через
+            # очередь (см. worker.py), а не молчаливой потери сообщения. Проверяем через
+            # isinstance, а не подстроку "429" в тексте — иначе можно случайно поймать
+            # 429 внутри произвольного id/сообщения об ошибке.
+            if (
+                any(code in str(e) for code in ("502", "503", "504"))
+                or isinstance(e, (aiohttp.ClientOSError, RateLimitAmoCRMError))
+            ):
                 raise RetryableAmoCRMError(str(e)) from e
             logger.error(
                 "Error reopening conversation for platform_id=%s, bot=%s: %s",
@@ -726,7 +740,14 @@ class ConversationManager:
             return await self.storage.get_by_platform_id(platform_id, bot_name)
 
         except Exception as e:
-            if any(code in str(e) for code in ("502", "503", "504")) or isinstance(e, aiohttp.ClientOSError):
+            # RateLimitAmoCRMError (429) — тоже временная ошибка, требует повтора через
+            # очередь (см. worker.py), а не молчаливой потери сообщения. Проверяем через
+            # isinstance, а не подстроку "429" в тексте — иначе можно случайно поймать
+            # 429 внутри произвольного id/сообщения об ошибке.
+            if (
+                any(code in str(e) for code in ("502", "503", "504"))
+                or isinstance(e, (aiohttp.ClientOSError, RateLimitAmoCRMError))
+            ):
                 raise RetryableAmoCRMError(str(e)) from e
             logger.error(
                 "Error recreating amojo chat for platform_id=%s, bot=%s: %s",
