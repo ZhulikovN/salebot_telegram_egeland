@@ -14,10 +14,12 @@ UTM-переменные клиента (utm_medium, utm_content и т.д. мо�
 Окно само "сдвигается": диалог старше UTM_BACKFILL_WINDOW_HOURS больше не
 проверяется, независимо от результата — никаких вечных повторов.
 
-Нагрузка на AmoCRM ограничена не отдельно, а вместе со всем остальным
-проектом: rate limiter в AmoCRMClient считает запросы через общий Redis-ключ
-"rate_limit:amocrm", используемый также веб-воркерами. Этот сервис — просто
-ещё один клиент того же лимита, отдельно превысить его не может.
+Если задан UTM_AMO_ACCESS_TOKEN (переменная окружения, токен отдельной
+интеграции в AmoCRM) — сервис использует свой Bearer-токен и свой Redis-ключ
+"rate_limit:amocrm:utm", то есть свои 7 req/sec, независимые от основного
+воркера. Если UTM_AMO_ACCESS_TOKEN не задан — работает как раньше: общий
+токен и общий Redis-ключ "rate_limit:amocrm" с веб-воркерами, отдельно
+превысить лимит не может.
 
 Запуск как отдельный systemd-сервис (одна инстанция, БЕЗ шаблонизации @N —
 дублировать не нужно, окно и без этого покрывает все диалоги):
@@ -176,7 +178,26 @@ async def main() -> None:
     )
     logger.info("=" * 60)
 
-    amocrm = AmoCRMClient()
+    # Если задан отдельный токен (своя интеграция в AmoCRM) — используем свой
+    # Redis-ключ для rate limiter, чтобы не делить лимит с основным воркером.
+    # Если токена нет — работаем как раньше, на общем токене и общем лимите
+    # (иначе получим два независимых лимитера на один и тот же физический
+    # токен, и вместе они превысят реальные 7 req/sec на стороне AmoCRM).
+    has_own_integration = bool(settings.UTM_AMO_ACCESS_TOKEN)
+    amocrm = AmoCRMClient(
+        access_token=settings.UTM_AMO_ACCESS_TOKEN or None,
+        rate_limit_key="rate_limit:amocrm:utm" if has_own_integration else "rate_limit:amocrm",
+        max_requests_per_second=(
+            settings.UTM_AMOCRM_MAX_REQUESTS_PER_SECOND
+            if has_own_integration
+            else settings.AMOCRM_MAX_REQUESTS_PER_SECOND
+        ),
+    )
+    logger.info(
+        "AmoCRM client for utm_backfill: own_integration=%s, rate_limit_key=%s",
+        has_own_integration,
+        amocrm.rate_limit_key,
+    )
     salebot = SalebotClient()
     storage = get_conversation_storage()
 
