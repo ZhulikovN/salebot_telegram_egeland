@@ -41,14 +41,21 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Как часто запускать проход по диалогам
-UTM_BACKFILL_INTERVAL_SEC = 90
+UTM_BACKFILL_INTERVAL_SEC = 300  # 5 минут — даём Salebot время записать метки
 # Не проверяем диалоги старше этого возраста — окно само "сдвигается"
 UTM_BACKFILL_WINDOW_HOURS = 2
-# Пауза между обработкой отдельных диалогов внутри одного прохода —
-# бережём Salebot API (у AmoCRM свой общий rate limiter, здесь не нужен)
+# Пауза между диалогами при УСПЕШНОМ запросе к Salebot
 UTM_BACKFILL_PER_ITEM_DELAY_SEC = 0.3
+# Пауза после ОШИБКИ от Salebot (502/503/сеть) — даём сервису время восстановиться
+# вместо того чтобы продолжать долбить его на той же скорости
+UTM_SALEBOT_ERROR_BACKOFF_SEC = 5
 # TTL флага "все UTM уже заполнены" — больше чем окно, чтобы не перепроверять
 UTM_DONE_TTL_SEC = UTM_BACKFILL_WINDOW_HOURS * 3600 + 3600
+# TTL флага "Salebot не вернул ни одного UTM-значения" — кешируем пустой ответ,
+# чтобы не опрашивать Salebot повторно каждые 90 сек для клиентов без UTM-данных.
+# Выбрано 1 час: UTM в Salebot может появиться позже (бот ещё не дошёл до нужного шага),
+# но опрашивать каждые 90 сек при 500+ диалогах — это ~3 req/s непрерывно.
+UTM_NO_DATA_TTL_SEC = 3600
 
 shutdown_requested = False
 
@@ -105,16 +112,28 @@ async def run_once(
         if shutdown_requested:
             break
 
+        # Пропускаем сделки где все UTM уже заполнены
         done_key = f"utm_sync_done:{conv.lead_id}"
         if await redis.get(done_key):
             continue
 
+        # Пропускаем сделки где Salebot недавно вернул пустые данные —
+        # нет смысла спрашивать его снова каждые 90 сек, если UTM у клиента
+        # ещё не появился. Ключ живёт UTM_NO_DATA_TTL_SEC секунд (1 час).
+        no_data_key = f"utm_no_data:{conv.lead_id}"
+        if await redis.get(no_data_key):
+            continue
+
         checked += 1
+        error_occurred = False
         try:
             variables = await salebot.get_variables(conv.salebot_client_id)
             utm_data = _extract_utm(variables)
 
             if not any(utm_data.values()):
+                # Salebot не знает UTM для этого клиента — кешируем чтобы
+                # не долбить его снова через 90 сек
+                await redis.set(no_data_key, "1", ex=UTM_NO_DATA_TTL_SEC)
                 continue
 
             all_filled = await amocrm.fill_missing_utm_fields(conv.lead_id, utm_data)
@@ -123,6 +142,7 @@ async def run_once(
                 updated += 1
 
         except Exception as e:
+            error_occurred = True
             logger.warning(
                 "UTM backfill failed for lead=%s, conversation=%s: %s",
                 conv.lead_id,
@@ -130,10 +150,11 @@ async def run_once(
                 e,
             )
         finally:
-            # В finally, а не в конце тела try — иначе early `continue` выше
-            # (пустые переменные у Salebot) пропускал паузу, и запросы к
-            # Salebot API шли подряд без выдержки.
-            await asyncio.sleep(UTM_BACKFILL_PER_ITEM_DELAY_SEC)
+            # При ошибке (502/503/сеть) — увеличенная пауза, чтобы дать
+            # Salebot или AmoCRM время восстановиться перед следующим запросом.
+            # При успехе — стандартная пауза 0.3с.
+            delay = UTM_SALEBOT_ERROR_BACKOFF_SEC if error_occurred else UTM_BACKFILL_PER_ITEM_DELAY_SEC
+            await asyncio.sleep(delay)
 
     logger.info(
         "UTM backfill pass finished: checked=%d, fully_filled=%d", checked, updated
