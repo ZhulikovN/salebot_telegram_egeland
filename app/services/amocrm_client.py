@@ -22,6 +22,29 @@ class RetryableAmoCRMError(aiohttp.ClientError):
     pass
 
 
+class RateLimitAmoCRMError(aiohttp.ClientError):
+    """
+    429 от AmoCRM — превышен лимит запросов.
+
+    Это не транзиентная сетевая ошибка вроде 502/503: причиной может быть не
+    только наш собственный лимит (7 req/sec на интеграцию), но и общий лимит
+    аккаунта (50 req/sec на все интеграции сразу — например, при пиковой
+    нагрузке в вебинар). Такому лимиту нужно заметно больше времени на
+    восстановление, поэтому у него отдельный, более долгий backoff и больше
+    попыток (см. RATE_LIMIT_BACKOFF_BASE_SEC / RATE_LIMIT_MAX_RETRIES ниже).
+    """
+    pass
+
+
+# Backoff при 429: фиксированный длинный интервал с небольшим приростом
+# (5с, 7с, 9с, 11с, 13с), а не экспоненциальный как для 502/503 — чтобы
+# реально пережить пиковую нагрузку на аккаунтный лимit 50 req/sec.
+RATE_LIMIT_BACKOFF_BASE_SEC = 5
+# Минимальное количество попыток специально для 429, даже если вызывающий
+# код передал retry поменьше (по умолчанию retry=3 — этого мало для 429).
+RATE_LIMIT_MAX_RETRIES = 5
+
+
 class AmoCRMClient:
     """
     Асинхронный клиент для AmoCRM API v4.
@@ -33,10 +56,32 @@ class AmoCRMClient:
     - Error handling
     """
 
-    def __init__(self) -> None:
-        """Инициализация клиента AmoCRM."""
+    def __init__(
+        self,
+        access_token: str | None = None,
+        rate_limit_key: str = "rate_limit:amocrm",
+        max_requests_per_second: int | None = None,
+    ) -> None:
+        """
+        Инициализация клиента AmoCRM.
+
+        Args:
+            access_token: Bearer-токен. Если не передан — берётся settings.AMO_ACCESS_TOKEN
+                (токен основной интеграции).
+            rate_limit_key: Redis-ключ для rate limiter. Разным интеграциям (свой client_id
+                в AmoCRM) нужен свой ключ, иначе они будут делить один общий счётчик 7 req/sec,
+                даже если физически у них разные токены.
+            max_requests_per_second: лимит для этого клиента. Если не передан —
+                settings.AMOCRM_MAX_REQUESTS_PER_SECOND.
+        """
         self.base_url = settings.amocrm_api_url
-        self.access_token = settings.AMO_ACCESS_TOKEN
+        self.access_token = access_token or settings.AMO_ACCESS_TOKEN
+        self.rate_limit_key = rate_limit_key
+        self.max_requests_per_second = (
+            max_requests_per_second
+            if max_requests_per_second is not None
+            else settings.AMOCRM_MAX_REQUESTS_PER_SECOND
+        )
         self.session: aiohttp.ClientSession | None = None
 
     async def _ensure_session(self) -> None:
@@ -51,7 +96,7 @@ class AmoCRMClient:
         Использует атомарные операции incr/decr для подсчета запросов.
         """
         redis = get_redis()
-        key = "rate_limit:amocrm"
+        key = self.rate_limit_key
 
         for _ in range(50):
             count = await redis.incr(key)
@@ -59,7 +104,7 @@ class AmoCRMClient:
             if count == 1:
                 await redis.expire(key, 1)
 
-            if count <= settings.AMOCRM_MAX_REQUESTS_PER_SECOND:
+            if count <= self.max_requests_per_second:
                 return
 
             await redis.decr(key)
@@ -102,15 +147,19 @@ class AmoCRMClient:
         }
 
         last_error = None
-        
-        for attempt in range(retry):
+        attempt = 0
+        # У 429 свой минимум попыток — не обрезаем его значением retry,
+        # переданным вызывающим кодом, если оно меньше RATE_LIMIT_MAX_RETRIES.
+        max_attempts = retry
+
+        while attempt < max_attempts:
             try:
                 logger.debug(
                     "AmoCRM API request: %s %s (attempt %d/%d)",
                     method,
                     url,
                     attempt + 1,
-                    retry,
+                    max_attempts,
                 )
 
                 if method == "GET":
@@ -134,19 +183,33 @@ class AmoCRMClient:
             except aiohttp.ClientError as e:
                 last_error = e
                 logger.error(
-                    "AmoCRM API error (attempt %d/%d): %s", attempt + 1, retry, e
+                    "AmoCRM API error (attempt %d/%d): %s", attempt + 1, max_attempts, e
                 )
                 # 403 — IP заблокирован, retry бессмысленен
                 if "IP blocked 403" in str(e):
                     logger.error("IP blocked by AmoCRM, aborting retries for %s %s", method, endpoint)
                     raise
-                if attempt == retry - 1:
+
+                is_rate_limited = isinstance(e, RateLimitAmoCRMError)
+                if is_rate_limited:
+                    max_attempts = max(max_attempts, RATE_LIMIT_MAX_RETRIES)
+
+                if attempt == max_attempts - 1:
                     logger.error("All retry attempts failed for %s %s", method, endpoint)
                     raise
-                # Exponential backoff: 2^0=1s, 2^1=2s, 2^2=4s
-                delay = 2**attempt
+
+                if is_rate_limited:
+                    # Фиксированный длинный backoff вместо экспоненциального:
+                    # 5с, 7с, 9с, 11с, 13с — даём аккаунтному лимиту 50 req/sec
+                    # реально освободиться, а не долбим его каждую секунду.
+                    delay = RATE_LIMIT_BACKOFF_BASE_SEC + attempt * 2
+                else:
+                    # Exponential backoff для транзиентных 502/503/сети: 1с, 2с, 4с
+                    delay = 2**attempt
+
                 logger.info("Retrying in %d seconds...", delay)
                 await asyncio.sleep(delay)
+                attempt += 1
             except Exception as e:
                 logger.error("Unexpected error in AmoCRM request: %s", e, exc_info=True)
                 raise
@@ -176,8 +239,9 @@ class AmoCRMClient:
 
         if response.status == 429:
             logger.warning("AmoCRM rate limit exceeded (429)")
-            await asyncio.sleep(1)
-            raise aiohttp.ClientError("Rate limit exceeded")
+            # Пауза здесь не нужна — её теперь считает _make_request (более
+            # долгий backoff специально для 429, см. RATE_LIMIT_BACKOFF_BASE_SEC).
+            raise RateLimitAmoCRMError("Rate limit exceeded (429)")
 
         if response.status in (502, 503, 504):
             text = await response.text()
