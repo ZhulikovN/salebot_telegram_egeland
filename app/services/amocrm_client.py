@@ -587,6 +587,7 @@ class AmoCRMClient:
         status_id: int | None = None,
         lead_name: str | None = None,
         utm_data: dict | None = None,
+        tag_ids: list[int] | None = None,
     ) -> int:
         """
         Создать сделку в AmoCRM (без проверки дублей).
@@ -598,6 +599,8 @@ class AmoCRMClient:
             status_id: ID этапа (по умолчанию из settings)
             lead_name: Название сделки (если не передано — формируется из bot_name)
             utm_data: UTM-метки первого касания (utm_source, utm_medium, utm_campaign, utm_term, utm_content)
+            tag_ids: ID тегов, которые нужно поставить сразу при создании (через _embedded.tags,
+                без отдельных запросов add_lead_tag после)
 
         Returns:
             ID созданной сделки
@@ -635,13 +638,17 @@ class AmoCRMClient:
                     )
             logger.info("Adding UTM data to lead: %s", utm_data)
 
+        embedded: dict[str, Any] = {
+            "contacts": [{"id": contact_id}],
+        }
+        if tag_ids:
+            embedded["tags"] = [{"id": tag_id} for tag_id in tag_ids]
+
         lead_data: dict[str, Any] = {
             "name": name,
             "pipeline_id": pipeline_id,
             "status_id": status_id,
-            "_embedded": {
-                "contacts": [{"id": contact_id}],
-            },
+            "_embedded": embedded,
             "custom_fields_values": custom_fields_values,
         }
 
