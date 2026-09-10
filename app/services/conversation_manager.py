@@ -391,7 +391,7 @@ class ConversationManager:
             )
 
             # 1. Найти или создать контакт
-            contact_id = await self._find_or_create_contact(
+            contact_id, contact_is_new = await self._find_or_create_contact(
                 platform_id=platform_id,
                 client_name=client_name,
                 tg_username=tg_username,
@@ -399,11 +399,19 @@ class ConversationManager:
                 platform_id_field=bot_config.platform_id_field,
             )
 
-            # 2. Проверить дубль сделки в нужной воронке (зависит от бота)
-            duplicate_lead = await self.amocrm.check_duplicate_lead(
-                contact_id=contact_id,
-                pipeline_id=bot_config.pipeline_id,
-            )
+            # Теги, которые должны оказаться на сделке в любом случае
+            tag_ids = [SALEBOT_PRO_TAG_ID, *(bot_config.default_tags or [])]
+
+            # 2. Проверить дубль сделки в нужной воронке (зависит от бота).
+            # Если контакт только что создан — дублей у него быть не может,
+            # запрос можно пропустить (см. gap #1 в оптимизации API-вызовов).
+            if contact_is_new:
+                duplicate_lead = None
+            else:
+                duplicate_lead = await self.amocrm.check_duplicate_lead(
+                    contact_id=contact_id,
+                    pipeline_id=bot_config.pipeline_id,
+                )
 
             if duplicate_lead:
                 lead_id = duplicate_lead["id"]
@@ -415,6 +423,10 @@ class ConversationManager:
                 # First-touch для дубля: заполняем только пустые UTM поля сделки
                 if utm_data:
                     await self._update_lead_utm_first_touch(lead_id, utm_data)
+
+                # Сделка уже существовала — теги ставим отдельными запросами
+                for tag_id in tag_ids:
+                    await self.amocrm.add_lead_tag(lead_id, tag_id)
             else:
                 lead_id = await self.amocrm.create_lead(
                     contact_id=contact_id,
@@ -423,6 +435,7 @@ class ConversationManager:
                     status_id=bot_config.status_id,
                     lead_name=bot_config.lead_name or None,
                     utm_data=utm_data,
+                    tag_ids=tag_ids,
                 )
                 logger.info("New lead created: lead_id=%s", lead_id)
 
@@ -432,14 +445,6 @@ class ConversationManager:
                 client_id=salebot_client_id,
                 variables={"amo_lead_id": str(lead_id)},
             )
-
-            # Ставим универсальный тег интеграции на каждую сделку
-            await self.amocrm.add_lead_tag(lead_id, SALEBOT_PRO_TAG_ID)
-
-            # Ставим default_tags на сделку (теги, заданные в конфиге бота)
-            if bot_config.default_tags:
-                for tag_id in bot_config.default_tags:
-                    await self.amocrm.add_lead_tag(lead_id, tag_id)
 
             # 3. Создать чат в amojo
             # conversation_id — наш идентификатор, с ним же отправляем сообщения
@@ -534,10 +539,11 @@ class ConversationManager:
                 bot_name,
             )
             contact_data = await self.amocrm.get_contact(contact_id)
+            contact_is_new = False
 
             if contact_data == {}:
                 # Контакт поглощён (204) — ищем актуального
-                fresh_contact_id = await self._find_or_create_contact(
+                fresh_contact_id, contact_is_new = await self._find_or_create_contact(
                     platform_id=platform_id,
                     client_name=client_name,
                     tg_username=tg_username,
@@ -577,12 +583,20 @@ class ConversationManager:
                     contact_id,
                 )
 
+            # Теги, которые должны оказаться на сделке в любом случае
+            tag_ids = [SALEBOT_PRO_TAG_ID, *(bot_config.default_tags or [])]
+
             # Ищем открытую сделку во всех воронках — чтобы не создавать дубль,
             # даже если существующая сделка находится в воронке другого бота.
-            duplicate_lead = await self.amocrm.check_duplicate_lead(
-                contact_id=contact_id,
-                pipeline_id=None,
-            )
+            # Если контакт только что создан (случай поглощения NOVA выше) —
+            # дублей у него быть не может, запрос можно пропустить.
+            if contact_is_new:
+                duplicate_lead = None
+            else:
+                duplicate_lead = await self.amocrm.check_duplicate_lead(
+                    contact_id=contact_id,
+                    pipeline_id=None,
+                )
 
             if duplicate_lead:
                 lead_id = duplicate_lead["id"]
@@ -593,6 +607,10 @@ class ConversationManager:
                 )
                 if utm_data:
                     await self._update_lead_utm_first_touch(lead_id, utm_data)
+
+                # Сделка уже существовала — теги ставим отдельными запросами
+                for tag_id in tag_ids:
+                    await self.amocrm.add_lead_tag(lead_id, tag_id)
             else:
                 lead_id = await self.amocrm.create_lead(
                     contact_id=contact_id,
@@ -601,6 +619,7 @@ class ConversationManager:
                     status_id=bot_config.status_id,
                     lead_name=bot_config.lead_name or None,
                     utm_data=utm_data,
+                    tag_ids=tag_ids,
                 )
                 logger.info("New lead created on reopen: lead_id=%s", lead_id)
 
@@ -631,13 +650,6 @@ class ConversationManager:
                 client_id=salebot_client_id,
                 variables={"amo_lead_id": str(lead_id)},
             )
-
-            # Ставим универсальный тег интеграции на каждую сделку
-            await self.amocrm.add_lead_tag(lead_id, SALEBOT_PRO_TAG_ID)
-
-            if bot_config.default_tags:
-                for tag_id in bot_config.default_tags:
-                    await self.amocrm.add_lead_tag(lead_id, tag_id)
 
             # Обновляем lead_id в БД и сбрасываем messages_count
             await self.storage.update_lead_id(platform_id, bot_name, lead_id)
@@ -732,7 +744,7 @@ class ConversationManager:
         tg_username: str | None,
         utm_data: dict | None = None,
         platform_id_field: int | None = None,
-    ) -> int:
+    ) -> tuple[int, bool]:
         """
         Найти существующий контакт или создать новый.
 
@@ -748,7 +760,9 @@ class ConversationManager:
             platform_id_field: ID поля AmoCRM для хранения platform_id (по умолчанию FIELD_TG_ID)
 
         Returns:
-            ID контакта в AMO
+            Пара (ID контакта в AMO, признак того, что контакт создан только что —
+            значит у него гарантированно нет ни одной сделки, проверку дублей можно
+            пропустить)
         """
         pid_field = platform_id_field or settings.FIELD_TG_ID
 
@@ -779,7 +793,7 @@ class ConversationManager:
             if fields_to_update:
                 await self.amocrm.update_contact(contact_id, fields_to_update)
 
-            return contact_id
+            return contact_id, False
 
         # Создаём новый контакт
         contact_id = await self.amocrm.create_contact(
@@ -789,7 +803,7 @@ class ConversationManager:
             platform_id_field=pid_field,
         )
         logger.info("New contact created: %s", contact_id)
-        return contact_id
+        return contact_id, True
 
     async def _update_lead_utm_first_touch(self, lead_id: int, utm_data: dict) -> None:
         """
