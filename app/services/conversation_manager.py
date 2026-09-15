@@ -237,6 +237,26 @@ class ConversationManager:
                 "status_id": bot_config_init.status_id,
             }
 
+        # UTM backfill: ставим Redis-флаг — utm_backfill_worker подхватит при
+        # следующем проходе (≤5 мин). Работает для новых и возвращающихся клиентов.
+        # Ключ живёт 2 часа; значение = salebot_client_id (не нужен запрос в БД).
+        # try/except обязателен: это вспомогательная фича, сбой Redis здесь
+        # не должен ронять доставку сообщения клиента (см. _notify_manager_*).
+        if conversation.lead_id:
+            try:
+                _redis = get_redis()
+                await _redis.set(
+                    f"utm_check_needed:{conversation.lead_id}",
+                    str(salebot_client_id),
+                    ex=2 * 3600,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to set utm_check_needed flag for lead=%s: %s",
+                    conversation.lead_id,
+                    e,
+                )
+
         logger.info(
             "Sending message to amojo: conversation=%s",
             conversation.conversation_id,

@@ -6,23 +6,20 @@ UTM-переменные клиента (utm_medium, utm_content и т.д. мо�
 уже после первого сообщения). Первое касание пишет только то, что было
 доступно в тот момент — остальное остаётся пустым навсегда.
 
-Решение: отдельный процесс, который раз в UTM_BACKFILL_INTERVAL_SEC секунд
-берёт диалоги, созданные не позднее UTM_BACKFILL_WINDOW_HOURS часов назад,
-запрашивает у Salebot актуальный снимок переменных клиента (get_variables)
-и дозаполняет только пустые UTM-поля сделки.
+Решение: conversation_manager ставит в Redis флаг
+    utm_check_needed:{lead_id} = "{salebot_client_id}"  EX 7200
+при каждом входящем salebot_message (как для новых, так и для возвращающихся
+клиентов). Этот воркер раз в UTM_BACKFILL_INTERVAL_SEC секунд делает SCAN
+по паттерну utm_check_needed:* и дозаполняет только пустые UTM-поля сделки.
 
-Окно само "сдвигается": диалог старше UTM_BACKFILL_WINDOW_HOURS больше не
-проверяется, независимо от результата — никаких вечных повторов.
+Флаг удаляется после полного заполнения или по истечении TTL (2 часа).
+utm_no_data:{lead_id} (1 час) кеширует пустой ответ Salebot — не долбим
+его каждые 5 мин если UTM у клиента нет.
 
-Если задан UTM_AMO_ACCESS_TOKEN (переменная окружения, токен отдельной
-интеграции в AmoCRM) — сервис использует свой Bearer-токен и свой Redis-ключ
-"rate_limit:amocrm:utm", то есть свои 7 req/sec, независимые от основного
-воркера. Если UTM_AMO_ACCESS_TOKEN не задан — работает как раньше: общий
-токен и общий Redis-ключ "rate_limit:amocrm" с веб-воркерами, отдельно
-превысить лимит не может.
+Если задан UTM_AMO_ACCESS_TOKEN — сервис использует свой Bearer-токен и
+Redis-ключ "rate_limit:amocrm:utm" (свои 7 req/sec, независимые от воркера).
 
-Запуск как отдельный systemd-сервис (одна инстанция, БЕЗ шаблонизации @N —
-дублировать не нужно, окно и без этого покрывает все диалоги):
+Запуск как отдельный systemd-сервис (одна инстанция):
     python -m app.workers.utm_backfill_worker
 """
 import asyncio
@@ -30,7 +27,6 @@ import logging
 import signal
 from typing import Any
 
-from app.db.storage import ConversationStorage, get_conversation_storage
 from app.services.amocrm_client import AmoCRMClient
 from app.services.salebot_client import SalebotClient
 from app.settings import settings
@@ -42,21 +38,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Как часто запускать проход по диалогам
-UTM_BACKFILL_INTERVAL_SEC = 300  # 5 минут — даём Salebot время записать метки
-# Не проверяем диалоги старше этого возраста — окно само "сдвигается"
-UTM_BACKFILL_WINDOW_HOURS = 2
-# Пауза между диалогами при УСПЕШНОМ запросе к Salebot
+# Как часто запускать проход по флагам
+UTM_BACKFILL_INTERVAL_SEC = 300  # 5 минут
+# Пауза между сделками при УСПЕШНОМ запросе к Salebot
 UTM_BACKFILL_PER_ITEM_DELAY_SEC = 0.3
-# Пауза после ОШИБКИ от Salebot (502/503/сеть) — даём сервису время восстановиться
-# вместо того чтобы продолжать долбить его на той же скорости
+# Пауза после ОШИБКИ от Salebot (502/503/сеть)
 UTM_SALEBOT_ERROR_BACKOFF_SEC = 5
-# TTL флага "все UTM уже заполнены" — больше чем окно, чтобы не перепроверять
-UTM_DONE_TTL_SEC = UTM_BACKFILL_WINDOW_HOURS * 3600 + 3600
-# TTL флага "Salebot не вернул ни одного UTM-значения" — кешируем пустой ответ,
-# чтобы не опрашивать Salebot повторно каждые 90 сек для клиентов без UTM-данных.
-# Выбрано 1 час: UTM в Salebot может появиться позже (бот ещё не дошёл до нужного шага),
-# но опрашивать каждые 90 сек при 500+ диалогах — это ~3 req/s непрерывно.
+# TTL флага "все UTM уже заполнены" — 9 часов (дольше чем TTL utm_check_needed)
+UTM_DONE_TTL_SEC = 9 * 3600
+# TTL кеша "Salebot вернул пустые данные" — 1 час
 UTM_NO_DATA_TTL_SEC = 3600
 
 shutdown_requested = False
@@ -95,66 +85,83 @@ def _extract_utm(variables: dict) -> dict[str, str | None]:
     }
 
 
-async def run_once(
-    amocrm: AmoCRMClient, salebot: SalebotClient, storage: ConversationStorage
-) -> None:
-    """Один проход: найти диалоги в окне, дозаполнить пустые UTM-поля."""
+async def run_once(amocrm: AmoCRMClient, salebot: SalebotClient) -> None:
+    """Один проход: найти все флаги utm_check_needed:* в Redis и дозаполнить UTM."""
     redis = get_redis()
 
-    conversations = await storage.get_recent_with_lead(
-        max_age_hours=UTM_BACKFILL_WINDOW_HOURS
-    )
+    # Собираем все ключи utm_check_needed:* через SCAN (не блокирует Redis)
+    keys: list[str] = []
+    cursor = 0
+    while True:
+        cursor, batch = await redis.scan(cursor, match="utm_check_needed:*", count=200)
+        for k in batch:
+            keys.append(k.decode() if isinstance(k, bytes) else k)
+        if cursor == 0:
+            break
 
-    logger.info("UTM backfill pass: %d conversation(s) in window", len(conversations))
+    logger.info("UTM backfill pass: %d pending check(s)", len(keys))
 
     checked = 0
     updated = 0
 
-    for conv in conversations:
+    for key in keys:
         if shutdown_requested:
             break
 
-        # Пропускаем сделки где все UTM уже заполнены
-        done_key = f"utm_sync_done:{conv.lead_id}"
-        if await redis.get(done_key):
+        # Извлекаем lead_id из имени ключа
+        lead_id_str = key.removeprefix("utm_check_needed:")
+        try:
+            lead_id = int(lead_id_str)
+        except ValueError:
+            logger.warning("UTM backfill: unexpected key format %r, skipping", key)
+            await redis.delete(key)
             continue
 
-        # Пропускаем сделки где Salebot недавно вернул пустые данные —
-        # нет смысла спрашивать его снова каждые 90 сек, если UTM у клиента
-        # ещё не появился. Ключ живёт UTM_NO_DATA_TTL_SEC секунд (1 час).
-        no_data_key = f"utm_no_data:{conv.lead_id}"
+        # Пропускаем если все UTM уже заполнены
+        done_key = f"utm_sync_done:{lead_id}"
+        if await redis.get(done_key):
+            await redis.delete(key)  # флаг больше не нужен
+            continue
+
+        # Пропускаем если Salebot недавно вернул пустые данные
+        no_data_key = f"utm_no_data:{lead_id}"
         if await redis.get(no_data_key):
+            continue  # флаг оставляем — попробуем снова после истечения no_data
+
+        # Получаем salebot_client_id из значения ключа (записывается в conv_manager)
+        raw = await redis.get(key)
+        if not raw:
+            continue  # TTL истёк между SCAN и GET — не страшно
+        try:
+            salebot_client_id = int(raw.decode() if isinstance(raw, bytes) else raw)
+        except (ValueError, AttributeError):
+            logger.warning("UTM backfill: bad salebot_client_id in key %r, removing", key)
+            await redis.delete(key)
             continue
 
         checked += 1
         error_occurred = False
         try:
-            variables = await salebot.get_variables(conv.salebot_client_id)
+            variables = await salebot.get_variables(salebot_client_id)
             utm_data = _extract_utm(variables)
 
             if not any(utm_data.values()):
-                # Salebot не знает UTM для этого клиента — кешируем чтобы
-                # не долбить его снова через 90 сек
+                # Salebot не знает UTM — кешируем пустой ответ на 1 час,
+                # флаг utm_check_needed оставляем (попробуем после истечения кеша)
                 await redis.set(no_data_key, "1", ex=UTM_NO_DATA_TTL_SEC)
                 continue
 
-            all_filled = await amocrm.fill_missing_utm_fields(conv.lead_id, utm_data)
+            all_filled = await amocrm.fill_missing_utm_fields(lead_id, utm_data)
             if all_filled:
                 await redis.set(done_key, "1", ex=UTM_DONE_TTL_SEC)
+                await redis.delete(key)  # все поля заполнены — флаг больше не нужен
                 updated += 1
+            # else: часть полей ещё пустая — оставляем флаг, попробуем позже
 
         except Exception as e:
             error_occurred = True
-            logger.warning(
-                "UTM backfill failed for lead=%s, conversation=%s: %s",
-                conv.lead_id,
-                conv.conversation_id,
-                e,
-            )
+            logger.warning("UTM backfill failed for lead=%s: %s", lead_id, e)
         finally:
-            # При ошибке (502/503/сеть) — увеличенная пауза, чтобы дать
-            # Salebot или AmoCRM время восстановиться перед следующим запросом.
-            # При успехе — стандартная пауза 0.3с.
             delay = UTM_SALEBOT_ERROR_BACKOFF_SEC if error_occurred else UTM_BACKFILL_PER_ITEM_DELAY_SEC
             await asyncio.sleep(delay)
 
@@ -171,18 +178,12 @@ async def main() -> None:
     logger.info("=" * 60)
     logger.info("UTM backfill worker started")
     logger.info(
-        "Interval=%ds, window=%dh, AmoCRM rate limit shared via Redis (%d req/s)",
+        "Interval=%ds, trigger=Redis utm_check_needed:*, AmoCRM rate limit via Redis (%d req/s)",
         UTM_BACKFILL_INTERVAL_SEC,
-        UTM_BACKFILL_WINDOW_HOURS,
         settings.AMOCRM_MAX_REQUESTS_PER_SECOND,
     )
     logger.info("=" * 60)
 
-    # Если задан отдельный токен (своя интеграция в AmoCRM) — используем свой
-    # Redis-ключ для rate limiter, чтобы не делить лимит с основным воркером.
-    # Если токена нет — работаем как раньше, на общем токене и общем лимите
-    # (иначе получим два независимых лимитера на один и тот же физический
-    # токен, и вместе они превысят реальные 7 req/sec на стороне AmoCRM).
     has_own_integration = bool(settings.UTM_AMO_ACCESS_TOKEN)
     amocrm = AmoCRMClient(
         access_token=settings.UTM_AMO_ACCESS_TOKEN or None,
@@ -199,12 +200,11 @@ async def main() -> None:
         amocrm.rate_limit_key,
     )
     salebot = SalebotClient()
-    storage = get_conversation_storage()
 
     try:
         while not shutdown_requested:
             try:
-                await run_once(amocrm, salebot, storage)
+                await run_once(amocrm, salebot)
             except Exception as e:
                 logger.error("UTM backfill pass crashed: %s", e, exc_info=True)
 
@@ -214,7 +214,6 @@ async def main() -> None:
                 await asyncio.sleep(1)
     finally:
         await amocrm.close()
-        await storage.close()
         logger.info("UTM backfill worker stopped")
 
 
