@@ -72,6 +72,15 @@ class Settings(BaseSettings):
         description="Shared secret для /webhook/telegram/{bot_name} от коллеги",
     )
 
+    # Боты, для которых ответы менеджера ВСЕГДА идут через relay (прямой Telegram Bot API),
+    # а не через Salebot — независимо от salebot_client_id в записи беседы.
+    # Используется для ботов, у которых канал в Salebot удалён или отсутствует.
+    # Формат env: DIRECT_TG_BOT_NAMES=["el_oge_diagnostika_bot"]
+    DIRECT_TG_BOT_NAMES: list[str] = Field(
+        default_factory=list,
+        description="Список bot_name, чьи ответы менеджера идут через relay, а не Salebot",
+    )
+
     # Relay-сервис на отдельном VPS вне РФ-облаков (см. relay/README.md).
     TELEGRAM_RELAY_URL: str = Field(
         default="",

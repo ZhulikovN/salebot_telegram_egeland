@@ -967,10 +967,12 @@ class ConversationManager:
                 # Уведомляем менеджера: медиафайл не дошёл до клиента.
                 await self._notify_manager_media_failed(conversation_id, conversation.lead_id)
 
-        # salebot_client_id=0 — raw TG webhook интеграция (без Salebot).
-        # Salebot API недоступен — отправляем текст напрямую через relay.
-        # Медиа к этому моменту уже обработано _send_media_via_relay выше.
-        if conversation.salebot_client_id == 0:
+        # Два случая когда отправляем через relay (прямой Telegram Bot API):
+        #   1. salebot_client_id=0  — беседа создана через raw TG webhook (без Salebot);
+        #   2. bot_name в DIRECT_TG_BOT_NAMES — канал в Salebot удалён/отсутствует,
+        #      все ответы для этого бота идут напрямую, независимо от salebot_client_id.
+        # Для всех остальных ботов — Salebot API (поведение прежнее).
+        if conversation.salebot_client_id == 0 or conversation.bot_name in settings.DIRECT_TG_BOT_NAMES:
             if message_text and settings.TELEGRAM_RELAY_URL:
                 token = settings.TELEGRAM_BOT_TOKENS.get(conversation.bot_name)
                 if token:
