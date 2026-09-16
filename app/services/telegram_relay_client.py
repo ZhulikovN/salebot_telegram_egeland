@@ -108,6 +108,55 @@ class TelegramRelayClient:
         except Exception as e:
             raise TelegramSendError(f"{type(e).__name__}: {e}") from e
 
+    async def resolve_file_url(self, file_id: str) -> str:
+        """
+        Получить прямую HTTPS-ссылку на файл Telegram по его file_id через relay.
+
+        Используется для медиа от клиента, когда raw Telegram update приходит
+        от стороннего сервера (без Salebot как посредника) — там есть только
+        file_id, а не готовая ссылка на файл.
+
+        Args:
+            file_id: file_id из Telegram update (photo/voice/video/document)
+
+        Returns:
+            Прямая HTTPS-ссылка на файл (её можно передать в amojo media_url)
+
+        Raises:
+            TelegramSendError: Если relay недоступен или Telegram вернул ошибку
+        """
+        if not settings.TELEGRAM_RELAY_URL:
+            raise TelegramSendError("TELEGRAM_RELAY_URL is not configured")
+
+        url = f"{settings.TELEGRAM_RELAY_URL.rstrip('/')}/resolve-file"
+
+        form = aiohttp.FormData()
+        form.add_field("token", self.token)
+        form.add_field("file_id", file_id)
+
+        headers = {"X-Relay-Secret": settings.TELEGRAM_RELAY_SECRET}
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    url,
+                    data=form,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as response:
+                    payload = await response.json(content_type=None)
+                    if response.status >= 400 or payload.get("ok") is not True:
+                        raise TelegramSendError(
+                            f"{response.status}: {payload.get('detail', payload)}"
+                        )
+                    file_url = payload["url"]
+                    logger.info("File resolved via relay: file_id=%s", file_id)
+                    return file_url
+        except TelegramSendError:
+            raise
+        except Exception as e:
+            raise TelegramSendError(f"{type(e).__name__}: {e}") from e
+
     async def send_text(self, chat_id: str, text: str) -> None:
         """
         Отправить текстовое сообщение клиенту через relay.

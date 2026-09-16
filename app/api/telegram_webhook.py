@@ -14,6 +14,7 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, Request
 
 from app.config.bot_routing import LOW_PRIORITY_BOT_NAMES
+from app.services.telegram_relay_client import TelegramRelayClient, TelegramSendError
 from app.settings import settings
 from app.workers.queue import LOW_PRIORITY_QUEUE, push_task
 
@@ -24,6 +25,34 @@ logger = logging.getLogger(__name__)
 # conversation_manager проверяет это значение и пропускает Salebot-специфичные
 # вызовы (save_variables, send_message).
 _NO_SALEBOT_CLIENT_ID = 0
+
+# Плейсхолдер-текст для медиа без подписи и без возможности получить ссылку
+# (relay не настроен или Telegram API вернул ошибку) — чтобы менеджер в AmoCRM
+# хотя бы видел, что клиент прислал что-то, а не тишину.
+_MEDIA_PLACEHOLDERS = {
+    "photo": "[фото]",
+    "voice": "[голосовое сообщение]",
+    "video": "[видео]",
+    "video_note": "[видео-сообщение]",
+    "document": "[файл]",
+    "audio": "[аудио]",
+}
+
+
+def _extract_media_file_id(msg: dict[str, Any]) -> tuple[str, str] | None:
+    """
+    Найти file_id вложения в сообщении Telegram, если есть.
+
+    Returns:
+        Пара (media_kind, file_id) или None, если вложения нет.
+    """
+    if "photo" in msg and msg["photo"]:
+        # photo — список размеров одной и той же картинки, последний — самый крупный.
+        return "photo", msg["photo"][-1]["file_id"]
+    for key in ("voice", "video", "video_note", "document", "audio"):
+        if key in msg and msg[key]:
+            return key, msg[key]["file_id"]
+    return None
 
 
 @router.post("/webhook/telegram/{bot_name}")
@@ -51,11 +80,43 @@ async def telegram_webhook(
     try:
         sender: dict[str, Any] | None = None
         message_text: str | None = None
+        attachments: list[str] = []
 
         if "message" in update:
             msg = update["message"]
             sender = msg.get("from") or {}
             message_text = msg.get("text") or msg.get("caption")
+
+            media = _extract_media_file_id(msg)
+            if media:
+                media_kind, file_id = media
+                token = settings.TELEGRAM_BOT_TOKENS.get(bot_name)
+                file_url: str | None = None
+                if token and settings.TELEGRAM_RELAY_URL:
+                    try:
+                        file_url = await TelegramRelayClient(token).resolve_file_url(file_id)
+                    except TelegramSendError as e:
+                        logger.error(
+                            "TG_WEBHOOK: failed to resolve file_id=%s, bot=%s, media=%s, error=%s",
+                            file_id,
+                            bot_name,
+                            media_kind,
+                            e,
+                        )
+                else:
+                    logger.warning(
+                        "TG_WEBHOOK: no token/relay configured for bot=%s — "
+                        "cannot resolve media file_id=%s",
+                        bot_name,
+                        file_id,
+                    )
+
+                if file_url:
+                    attachments.append(file_url)
+                elif not message_text:
+                    # Ни ссылки на файл, ни подписи — хотя бы плейсхолдер,
+                    # чтобы менеджер видел, что клиент прислал вложение.
+                    message_text = _MEDIA_PLACEHOLDERS.get(media_kind, "[вложение]")
         elif "callback_query" in update:
             cq = update["callback_query"]
             sender = cq.get("from") or {}
@@ -100,7 +161,7 @@ async def telegram_webhook(
                 "salebot_client_id": _NO_SALEBOT_CLIENT_ID,
                 "client_name": client_name,
                 "message_text": message_text,
-                "attachments": [],
+                "attachments": attachments,
                 "tg_username": tg_username,
                 "utm_data": {},
                 "is_bot_message": False,
