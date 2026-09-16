@@ -64,6 +64,14 @@ class Settings(BaseSettings):
         description="Маппинг bot_name → токен Telegram Bot API",
     )
 
+    # Секрет для аутентификации входящих raw Telegram updates от сервера коллеги.
+    # Коллега передаёт его в заголовке X-Webhook-Secret.
+    # Если пустой — endpoint недоступен (403).
+    TELEGRAM_WEBHOOK_SECRET: str = Field(
+        default="",
+        description="Shared secret для /webhook/telegram/{bot_name} от коллеги",
+    )
+
     # Relay-сервис на отдельном VPS вне РФ-облаков (см. relay/README.md).
     TELEGRAM_RELAY_URL: str = Field(
         default="",

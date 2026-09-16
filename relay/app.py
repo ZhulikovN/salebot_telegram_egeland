@@ -96,6 +96,44 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.post("/send-text")
+async def send_text(
+    token: str = Form(..., description="Токен Telegram-бота"),
+    chat_id: str = Form(..., description="Telegram ID клиента"),
+    text: str = Form(..., description="Текст сообщения"),
+    x_relay_secret: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """
+    Отправить текстовое сообщение через Telegram Bot API.
+
+    Используется когда основной бэкенд не имеет Salebot-клиента
+    (salebot_client_id=0), например для el_oge_diagnostika_bot.
+    """
+    _check_secret(x_relay_secret)
+
+    url = f"{_API_BASE}/bot{token}/sendMessage"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                url,
+                json={"chat_id": chat_id, "text": text},
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as response:
+                payload = await response.json(content_type=None)
+                if response.status >= 400 or not payload.get("ok"):
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"{response.status}: {payload.get('description', payload)}",
+                    )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"{type(e).__name__}: {e}") from e
+
+    logger.info("Text sent: chat_id=%s, length=%d", chat_id, len(text))
+    return {"ok": True}
+
+
 @app.post("/send-media")
 async def send_media(
     file: UploadFile,

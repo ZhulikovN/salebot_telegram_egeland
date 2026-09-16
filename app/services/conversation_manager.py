@@ -460,11 +460,13 @@ class ConversationManager:
                 logger.info("New lead created: lead_id=%s", lead_id)
 
             # Сохраняем lead_id в переменную amo_lead_id в профиле клиента Salebot
-            # чтобы коллега мог подставить #{amo_lead_id} в ссылку на оплату
-            await self.salebot.save_variables(
-                client_id=salebot_client_id,
-                variables={"amo_lead_id": str(lead_id)},
-            )
+            # чтобы коллега мог подставить #{amo_lead_id} в ссылку на оплату.
+            # salebot_client_id=0 — sentinel для raw TG webhook (без Salebot): пропускаем.
+            if salebot_client_id != 0:
+                await self.salebot.save_variables(
+                    client_id=salebot_client_id,
+                    variables={"amo_lead_id": str(lead_id)},
+                )
 
             # 3. Создать чат в amojo
             # conversation_id — наш идентификатор, с ним же отправляем сообщения
@@ -673,10 +675,12 @@ class ConversationManager:
                 #     lead_id,
                 # )
 
-            await self.salebot.save_variables(
-                client_id=salebot_client_id,
-                variables={"amo_lead_id": str(lead_id)},
-            )
+            # salebot_client_id=0 — sentinel для raw TG webhook: пропускаем.
+            if salebot_client_id != 0:
+                await self.salebot.save_variables(
+                    client_id=salebot_client_id,
+                    variables={"amo_lead_id": str(lead_id)},
+                )
 
             # Обновляем lead_id в БД и сбрасываем messages_count
             await self.storage.update_lead_id(platform_id, bot_name, lead_id)
@@ -962,6 +966,40 @@ class ConversationManager:
                 )
                 # Уведомляем менеджера: медиафайл не дошёл до клиента.
                 await self._notify_manager_media_failed(conversation_id, conversation.lead_id)
+
+        # salebot_client_id=0 — raw TG webhook интеграция (без Salebot).
+        # Salebot API недоступен — отправляем текст напрямую через relay.
+        # Медиа к этому моменту уже обработано _send_media_via_relay выше.
+        if conversation.salebot_client_id == 0:
+            if message_text and settings.TELEGRAM_RELAY_URL:
+                token = settings.TELEGRAM_BOT_TOKENS.get(conversation.bot_name)
+                if token:
+                    try:
+                        await TelegramRelayClient(token).send_text(
+                            chat_id=conversation.platform_id,
+                            text=message_text,
+                        )
+                        logger.info(
+                            "Manager text sent via relay: conversation=%s, bot=%s",
+                            conversation_id,
+                            conversation.bot_name,
+                        )
+                    except TelegramSendError as e:
+                        logger.error(
+                            "Relay text send failed: conversation=%s, bot=%s, error=%s",
+                            conversation_id,
+                            conversation.bot_name,
+                            e,
+                        )
+                else:
+                    logger.warning(
+                        "No token in TELEGRAM_BOT_TOKENS for bot=%s — "
+                        "cannot deliver manager text reply. conversation=%s",
+                        conversation.bot_name,
+                        conversation_id,
+                    )
+            await self.storage.increment_message_count(conversation_id)
+            return
 
         await self.salebot.send_message(
             client_id=conversation.salebot_client_id,

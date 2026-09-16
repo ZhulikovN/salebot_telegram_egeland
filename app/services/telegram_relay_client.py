@@ -107,3 +107,48 @@ class TelegramRelayClient:
             raise
         except Exception as e:
             raise TelegramSendError(f"{type(e).__name__}: {e}") from e
+
+    async def send_text(self, chat_id: str, text: str) -> None:
+        """
+        Отправить текстовое сообщение клиенту через relay.
+
+        Используется для ботов без Salebot-клиента (salebot_client_id=0),
+        например el_oge_diagnostika_bot — когда Salebot не является посредником.
+
+        Args:
+            chat_id: Telegram ID клиента (platform_id из диалога)
+            text: Текст сообщения
+
+        Raises:
+            TelegramSendError: Если relay недоступен или Telegram вернул ошибку
+        """
+        if not settings.TELEGRAM_RELAY_URL:
+            raise TelegramSendError("TELEGRAM_RELAY_URL is not configured")
+
+        url = f"{settings.TELEGRAM_RELAY_URL.rstrip('/')}/send-text"
+
+        form = aiohttp.FormData()
+        form.add_field("token", self.token)
+        form.add_field("chat_id", str(chat_id))
+        form.add_field("text", text)
+
+        headers = {"X-Relay-Secret": settings.TELEGRAM_RELAY_SECRET}
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    url,
+                    data=form,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as response:
+                    payload = await response.json(content_type=None)
+                    if response.status >= 400 or payload.get("ok") is not True:
+                        raise TelegramSendError(
+                            f"{response.status}: {payload.get('detail', payload)}"
+                        )
+                    logger.info("Text sent via relay: chat_id=%s, length=%d", chat_id, len(text))
+        except TelegramSendError:
+            raise
+        except Exception as e:
+            raise TelegramSendError(f"{type(e).__name__}: {e}") from e

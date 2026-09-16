@@ -216,6 +216,11 @@ _BOT_CONFIGS: dict[str, BotConfig] = {
             ("Отправить телефон", 10243538, 81078194),
         ),
     ),
+    "el_oge_diagnostika_bot": BotConfig(
+        pipeline_id=9472270,
+        status_id=75778594,
+        lead_name="Заявка: TG - @el_oge_diagnostika_bot",
+    ),
     "El_School_Ege_bot": BotConfig(
         pipeline_id=10195498,
         status_id=80731234,
