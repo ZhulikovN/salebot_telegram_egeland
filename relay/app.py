@@ -134,6 +134,49 @@ async def send_text(
     return {"ok": True}
 
 
+@app.post("/resolve-file")
+async def resolve_file(
+    token: str = Form(..., description="Токен Telegram-бота"),
+    file_id: str = Form(..., description="file_id из Telegram update"),
+    x_relay_secret: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """
+    Получить прямую ссылку на файл Telegram по file_id.
+
+    Raw Telegram update содержит только file_id — сам файл лежит на серверах
+    Telegram и скачать/получить путь можно только через Bot API (getFile),
+    до которого основной бэкенд не может достучаться напрямую. Используется
+    для медиа от клиента, когда Telegram webhook держит сторонний сервер
+    (например el_oge_diagnostika_bot), а не Salebot.
+    """
+    _check_secret(x_relay_secret)
+
+    url = f"{_API_BASE}/bot{token}/getFile"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                url,
+                json={"file_id": file_id},
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as response:
+                payload = await response.json(content_type=None)
+                if response.status >= 400 or not payload.get("ok"):
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"{response.status}: {payload.get('description', payload)}",
+                    )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"{type(e).__name__}: {e}") from e
+
+    file_path = payload["result"]["file_path"]
+    file_url = f"{_API_BASE}/file/bot{token}/{file_path}"
+
+    logger.info("File resolved: file_id=%s, file_path=%s", file_id, file_path)
+    return {"ok": True, "url": file_url}
+
+
 @app.post("/send-media")
 async def send_media(
     file: UploadFile,
