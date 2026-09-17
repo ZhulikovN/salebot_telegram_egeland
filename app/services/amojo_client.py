@@ -40,6 +40,44 @@ def _get_amojo_media_type(url: str) -> str:
     return "file"
 
 
+def _get_file_name(url: str) -> str:
+    """Получить имя файла из URL (последний сегмент пути, без query-параметров)."""
+    clean_url = url.split("?")[0].rstrip("/")
+    name = clean_url.rsplit("/", 1)[-1]
+    return name or "file"
+
+
+async def _get_file_size(media_url: str) -> int:
+    """
+    Получить размер файла по media_url через HEAD-запрос (Content-Length).
+
+    amoCRM требует поле file_size в payload для типов picture/video/file —
+    без него в интерфейсе AmoCRM вложение показывается как "0 Байт / Ошибка",
+    даже если сам файл по ссылке скачивается нормально (см. переписку по
+    диагностике el_oge_diagnostika_bot, 16.09.2026).
+
+    Args:
+        media_url: Публичная ссылка на файл (наш /media/... или сторонний хостинг)
+
+    Returns:
+        Размер файла в байтах, либо 0 если не удалось определить (best-effort)
+    """
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.head(
+                media_url,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as response:
+                content_length = response.headers.get("Content-Length")
+                if content_length is not None:
+                    return int(content_length)
+    except Exception as e:
+        logger.warning(
+            "Failed to HEAD media_url for file_size: url=%s, error=%s", media_url, e
+        )
+    return 0
+
+
 class AmojoClient:
     """Клиент для отправки сообщений в amojo (чаты AmoCRM)."""
 
@@ -127,11 +165,16 @@ class AmojoClient:
         """
         if media_url:
             media_type = _get_amojo_media_type(media_url)
+            file_name = _get_file_name(media_url)
+            file_size = await _get_file_size(media_url)
             logger.info(
-                "Sending media to amojo: conversation=%s, type=%s, url=%s",
+                "Sending media to amojo: conversation=%s, type=%s, url=%s, "
+                "file_name=%s, file_size=%d",
                 conversation_id,
                 media_type,
                 media_url,
+                file_name,
+                file_size,
             )
         else:
             media_type = None
@@ -147,10 +190,15 @@ class AmojoClient:
         msec_timestamp = int(now.timestamp() * 1000)
 
         if media_url and media_type:
+            # file_name и file_size обязательны для picture/video/file (см. докс
+            # amoCRM chat-api-reference) — без них AmoCRM показывает вложение
+            # как "0 Байт / Ошибка", даже если файл по ссылке скачивается нормально.
             message_block: dict[str, Any] = {
                 "type": media_type,
                 "text": text,
                 "media": media_url,
+                "file_name": file_name,
+                "file_size": file_size,
             }
         else:
             message_block = {
