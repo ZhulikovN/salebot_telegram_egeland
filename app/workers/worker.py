@@ -11,11 +11,17 @@
 
 import asyncio
 import logging
+import re
 import signal
 import sys
 
 from typing import Any
 
+from app.config.bot_routing import (
+    EL_OGE_DIAGNOSTIKA_CONSULT_PIPELINE_ID,
+    EL_OGE_DIAGNOSTIKA_CONSULT_STATUS_ID,
+    EL_OGE_DIAGNOSTIKA_GRADE_ENUM,
+)
 from app.services.amocrm_client import RetryableAmoCRMError
 from app.services.conversation_manager import ConversationManager
 from app.services.salebot_client import RetryableSalebotError
@@ -570,6 +576,249 @@ async def process_amojo_message(data: dict) -> None:
         await release_lock(lock_key)
 
 
+def _parse_grade(grade: Any) -> int | None:
+    """
+    Извлечь номер класса (7-11) из значения любого формата — int, "9",
+    "9 класс", "9-й" и т.п. Возвращает None, если не удалось распарсить.
+    """
+    if isinstance(grade, bool):
+        return None
+    if isinstance(grade, int):
+        return grade
+    if isinstance(grade, str):
+        match = re.search(r"\d+", grade)
+        if match:
+            return int(match.group())
+    return None
+
+
+async def process_lead_event(data: dict) -> None:
+    """
+    Обработать событие "заявка на консультацию" от сервера el_oge_diagnostika_bot.
+
+    Сделка уже существует (создана с первого касания, lead_id найден заранее
+    в app/api/lead_webhook.py по своей БД). Здесь:
+    1. Переносим сделку в целевую воронку/этап (move_lead).
+    2. Заполняем поля сделки: "Класс" (select, settings.FIELD_GRADE),
+       "Промокод" (текст, settings.FIELD_PROMO_CODE), UTM-метки (те же поля,
+       что и при создании сделки).
+    3. Добавляем примечание со ВСЕЙ информацией из события целиком (тип
+       обращения, класс, предмет(ы), результат диагностики, промокод,
+       источник, UTM, экран нажатия, их внутренний ID заявки) — включая
+       класс/промокод/UTM, которые уже пытались записать в поля выше. Это
+       намеренная страховка: если запись в поле сорвётся (ошибка AmoCRM,
+       нераспознанное значение класса и т.п.), данные не потеряются —
+       менеджер всё равно увидит их текстом в примечании.
+
+    Каждый шаг обёрнут в собственный try/except — сбой в одном (например,
+    неизвестное значение класса или упавший запрос на промокод) не должен
+    мешать выполнению остальных шагов и добавлению примечания. move_lead
+    и update_lead_enum сами не бросают исключений при ошибке AmoCRM
+    (логируют предупреждение) — это осознанно best-effort операция,
+    повторный вызов с тем же lead_id безопасен.
+
+    Перед любыми операциями проверяем, жива ли сделка (get_lead) — та же
+    проверка, что используется в обычном потоке сообщений
+    (ConversationManager.handle_salebot_message). lead_id, найденный заранее
+    в app/api/lead_webhook.py по БД, может быть устаревшим: та проверка
+    выполняется лениво, только когда пишет клиент, а не по расписанию —
+    если клиент давно не писал, а сделку тем временем удалили/слили через
+    NOVA-merge, наш lead_id может ссылаться на несуществующую сделку. В этом
+    случае переоткрываем диалог тем же механизмом (_reopen_conversation),
+    что и обычный поток, и используем свежий lead_id для всех операций ниже.
+
+    Args:
+        data: {"bot_name", "platform_id", "lead_id", "kind", "grade", "subject",
+            "subjects", "result", "promo", "source", "utm", "place",
+            "external_lead_id", "created"}
+    """
+    bot_name = data.get("bot_name")
+    platform_id = data.get("platform_id")
+    lead_id = data.get("lead_id")
+
+    if not lead_id or not platform_id or not bot_name:
+        logger.error(
+            "LEAD_EVENT: missing lead_id/platform_id/bot_name, data=%s", data
+        )
+        return
+
+    # Переиспользуем ConversationManager (а не отдельный AmoCRMClient), чтобы
+    # получить доступ к тем же storage/amocrm/salebot/amojo клиентам и к
+    # _reopen_conversation — той же логике переоткрытия, что и в обычном
+    # потоке сообщений.
+    manager = ConversationManager()
+    amocrm = manager.amocrm
+    try:
+        # 0. Проверяем, жива ли сделка, и переоткрываем диалог при необходимости.
+        lead = await amocrm.get_lead(lead_id)
+        if lead is None or lead == {}:
+            reason = "absorbed (204)" if lead == {} else "not found (404/error)"
+            logger.warning(
+                "LEAD_EVENT: lead %s %s, reopening conversation: platform_id=%s, bot=%s",
+                lead_id, reason, platform_id, bot_name,
+            )
+            conversation = await manager.storage.get_by_platform_id(platform_id, bot_name)
+            if not conversation:
+                logger.error(
+                    "LEAD_EVENT: conversation not found while reopening, "
+                    "platform_id=%s, bot=%s — skip event",
+                    platform_id, bot_name,
+                )
+                return
+
+            if conversation.lead_id and conversation.lead_id != lead_id:
+                # Обычный поток сообщений уже переоткрыл диалог раньше нас
+                # (клиент успел написать) — просто берём свежий lead_id из БД.
+                logger.info(
+                    "LEAD_EVENT: conversation already reopened elsewhere, "
+                    "using fresh lead_id=%s (was %s)",
+                    conversation.lead_id, lead_id,
+                )
+                lead_id = conversation.lead_id
+            else:
+                reopened = await manager._reopen_conversation(
+                    conversation=conversation,
+                    platform_id=platform_id,
+                    bot_name=bot_name,
+                    salebot_client_id=conversation.salebot_client_id,
+                    client_name=conversation.client_name or "Ученик",
+                    tg_username=conversation.tg_username,
+                    utm_data=None,
+                )
+                if not reopened or not reopened.lead_id:
+                    logger.error(
+                        "LEAD_EVENT: failed to reopen conversation, platform_id=%s, "
+                        "bot=%s — skip event",
+                        platform_id, bot_name,
+                    )
+                    return
+                lead_id = reopened.lead_id
+                logger.info("LEAD_EVENT: conversation reopened, new lead_id=%s", lead_id)
+
+        # 1. Перенос в целевую воронку/этап.
+        await amocrm.move_lead(
+            lead_id=lead_id,
+            pipeline_id=EL_OGE_DIAGNOSTIKA_CONSULT_PIPELINE_ID,
+            status_id=EL_OGE_DIAGNOSTIKA_CONSULT_STATUS_ID,
+        )
+
+        # 2. Класс — select-поле 809893. Отдельный try, чтобы неизвестное
+        # значение класса или сбой запроса не блокировали промокод/UTM/примечание.
+        grade = data.get("grade")
+        if grade:
+            grade_num = _parse_grade(grade)
+            enum_id = EL_OGE_DIAGNOSTIKA_GRADE_ENUM.get(grade_num) if grade_num else None
+            if enum_id:
+                try:
+                    await amocrm.update_lead_enum(lead_id, settings.FIELD_GRADE, enum_id)
+                except Exception as e:
+                    logger.warning(
+                        "LEAD_EVENT: failed to set grade field, lead_id=%s, grade=%r, error=%s",
+                        lead_id, grade, e,
+                    )
+            else:
+                logger.warning(
+                    "LEAD_EVENT: unknown/unparsable grade value, lead_id=%s, grade=%r — "
+                    "field not set (still goes into note below via kind/subject context)",
+                    lead_id, grade,
+                )
+
+        # 3. Промокод — текстовое поле 793154.
+        promo = data.get("promo")
+        if promo:
+            try:
+                await amocrm.update_lead(lead_id, {settings.FIELD_PROMO_CODE: promo})
+            except Exception as e:
+                logger.warning(
+                    "LEAD_EVENT: failed to set promo field, lead_id=%s, error=%s", lead_id, e
+                )
+
+        # 4. UTM — переиспользуем те же поля, что и при создании сделки.
+        utm = data.get("utm")
+        if isinstance(utm, dict):
+            utm_field_map = {
+                settings.FIELD_UTM_SOURCE: utm.get("utm_source"),
+                settings.FIELD_UTM_MEDIUM: utm.get("utm_medium"),
+                settings.FIELD_UTM_CAMPAIGN: utm.get("utm_campaign"),
+                settings.FIELD_UTM_TERM: utm.get("utm_term"),
+                settings.FIELD_UTM_CONTENT: utm.get("utm_content"),
+            }
+            utm_fields = {field_id: value for field_id, value in utm_field_map.items() if value}
+            if utm_fields:
+                try:
+                    await amocrm.update_lead(lead_id, utm_fields)
+                except Exception as e:
+                    logger.warning(
+                        "LEAD_EVENT: failed to set UTM fields, lead_id=%s, error=%s", lead_id, e
+                    )
+
+        # 5. Примечание — дублируем ВСЮ информацию из события текстом, включая
+        # класс/промокод/UTM (которые выше уже пытались записать в поля).
+        # Сделано намеренно как страховка: если запись в поле выше не удалась
+        # (ошибка AmoCRM, неизвестное значение класса и т.п.) — данные всё
+        # равно не потеряются, менеджер увидит их в примечании.
+        note_lines = ["Заявка на консультацию (el_oge_diagnostika_bot)"]
+
+        kind = data.get("kind")
+        if kind:
+            note_lines.append(f"Тип: {kind}")
+
+        if grade:
+            note_lines.append(f"Класс: {grade}")
+
+        subject = data.get("subject")
+        if subject:
+            note_lines.append(f"Предмет: {subject}")
+
+        subjects = data.get("subjects")
+        if subjects:
+            note_lines.append(f"Все предметы: {', '.join(str(s) for s in subjects)}")
+
+        result = data.get("result")
+        if result:
+            note_lines.append(f"Результат теста: {result}")
+
+        if promo:
+            note_lines.append(f"Промокод: {promo}")
+
+        source = data.get("source")
+        if source:
+            note_lines.append(f"Источник: {source}")
+
+        if isinstance(utm, dict):
+            utm_str = ", ".join(f"{k}={v}" for k, v in utm.items() if v)
+            if utm_str:
+                note_lines.append(f"UTM: {utm_str}")
+
+        place = data.get("place")
+        if place:
+            note_lines.append(f"Экран: {place}")
+
+        external_lead_id = data.get("external_lead_id")
+        if external_lead_id is not None:
+            note_lines.append(f"ID заявки (их сторона): {external_lead_id}")
+
+        await amocrm.add_lead_note(lead_id, "\n".join(note_lines))
+
+        logger.info(
+            "LEAD_EVENT processed: bot=%s, platform_id=%s, lead_id=%s",
+            bot_name,
+            platform_id,
+            lead_id,
+        )
+    except Exception as e:
+        logger.error(
+            "LEAD_EVENT failed: bot=%s, platform_id=%s, lead_id=%s, error=%s",
+            bot_name,
+            platform_id,
+            lead_id,
+            e,
+            exc_info=True,
+        )
+    finally:
+        await manager.close()
+
+
 async def process_task(task: dict) -> None:
     """
     Обработать задачу из очереди.
@@ -588,6 +837,9 @@ async def process_task(task: dict) -> None:
     elif task_type == "amojo_message":
         logger.info("PROCESS_TASK: calling process_amojo_message")
         await process_amojo_message(data)
+    elif task_type == "lead_event":
+        logger.info("PROCESS_TASK: calling process_lead_event")
+        await process_lead_event(data)
     else:
         logger.error("Unknown task type: %s", task_type)
 

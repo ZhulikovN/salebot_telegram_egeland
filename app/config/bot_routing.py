@@ -6,6 +6,22 @@ from app.settings import settings
 # Тег, который ставится на ВСЕ сделки из этой интеграции (Salebot-pro).
 SALEBOT_PRO_TAG_ID: int = 929163
 
+# Куда переносится сделка el_oge_diagnostika_bot при получении события
+# "заявка на консультацию" от сервера коллеги (см. app/api/lead_webhook.py).
+# Договорено в переписке с Григорием Коневым 17.09.2026.
+EL_OGE_DIAGNOSTIKA_CONSULT_PIPELINE_ID: int = 9472270
+EL_OGE_DIAGNOSTIKA_CONSULT_STATUS_ID: int = 75778594
+
+# Маппинг "класс" (число 7-11) → enum_id поля "Класс" (settings.FIELD_GRADE, id=809893)
+# для события lead_event. Те же enum_id, что и в _COMMON_FIELD_TRIGGERS ниже.
+EL_OGE_DIAGNOSTIKA_GRADE_ENUM: dict[int, int] = {
+    7: 1378765,
+    8: 1378767,
+    9: 1374871,
+    10: 1374873,
+    11: 1374875,
+}
+
 # Боты, сообщения которых уходят в низкоприоритетную очередь (tasks:vk_low),
 # чтобы массовая рассылка через них не блокировала обработку остальных
 # мессенджеров (Telegram, Instagram) при высокой нагрузке.
@@ -217,8 +233,13 @@ _BOT_CONFIGS: dict[str, BotConfig] = {
         ),
     ),
     "el_oge_diagnostika_bot": BotConfig(
-        pipeline_id=9472270,
-        status_id=75778594,
+        # Тестовая воронка — сюда попадает сделка с первого касания (та же
+        # воронка/этап, что и у skidki_el_bot, ВК-бота, El_School_Ege_bot).
+        # При событии "заявка на консультацию" от сервера коллеги сделка
+        # переносится в EL_OGE_DIAGNOSTIKA_CONSULT_PIPELINE_ID/STATUS_ID —
+        # см. app/api/lead_webhook.py.
+        pipeline_id=10195498,
+        status_id=80731234,
         lead_name="Заявка: TG - @el_oge_diagnostika_bot",
     ),
     "El_School_Ege_bot": BotConfig(

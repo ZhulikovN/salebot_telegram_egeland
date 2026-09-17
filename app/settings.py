@@ -120,6 +120,16 @@ class Settings(BaseSettings):
         default=809165, description="ID поля 'Источник перехода' в сделке"
     )
 
+    # Поля сделки для события lead_event (el_oge_diagnostika_bot, см. bot_routing.py).
+    # ID подтверждены по коду соседних интеграций на тот же аккаунт egeland.amocrm.ru
+    # (platform-payment-sync/.env, amocrm-payment-webhook/.temp/create_test_lead.py).
+    FIELD_GRADE: int = Field(
+        default=809893, description="ID поля 'Класс' сделки (select, тот же что и в field_triggers)"
+    )
+    FIELD_PROMO_CODE: int = Field(
+        default=793154, description="ID поля 'Промокод' сделки (текст)"
+    )
+
     # Воронка и этап — основные (test_el_salebot и все боты без явного конфига)
     AMOCRM_PIPELINE_ID: int = Field(
         default=10195498, description="ID воронки (Анкета удержания)"
