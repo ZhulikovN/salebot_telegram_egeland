@@ -695,12 +695,27 @@ async def process_lead_event(data: dict) -> None:
                 lead_id = reopened.lead_id
                 logger.info("LEAD_EVENT: conversation reopened, new lead_id=%s", lead_id)
 
-        # 1. Перенос в целевую воронку/этап.
-        await amocrm.move_lead(
-            lead_id=lead_id,
-            pipeline_id=EL_OGE_DIAGNOSTIKA_CONSULT_PIPELINE_ID,
-            status_id=EL_OGE_DIAGNOSTIKA_CONSULT_STATUS_ID,
+        # Флаг "новая заявка или обновление существующей".
+        # created=True/None  → первая заявка от клиента, полный набор действий.
+        # created=False      → клиент повторно нажал "Получить консультацию"
+        #                       (например, добавил новый предмет). Заявка та же,
+        #                       lead_id тот же — сделку не двигаем (менеджер
+        #                       уже мог продвинуть её вперёд, откатывать нельзя),
+        #                       только добавляем примечание с новым контекстом.
+        is_new_request = data.get("created") is not False
+
+        logger.info(
+            "LEAD_EVENT: lead_id=%s, is_new_request=%s (created=%r)",
+            lead_id, is_new_request, data.get("created"),
         )
+
+        # 1. Перенос в целевую воронку/этап — только для новой заявки.
+        if is_new_request:
+            await amocrm.move_lead(
+                lead_id=lead_id,
+                pipeline_id=EL_OGE_DIAGNOSTIKA_CONSULT_PIPELINE_ID,
+                status_id=EL_OGE_DIAGNOSTIKA_CONSULT_STATUS_ID,
+            )
 
         # 2. Класс — select-поле 809893. Отдельный try, чтобы неизвестное
         # значение класса или сбой запроса не блокировали промокод/UTM/примечание.
