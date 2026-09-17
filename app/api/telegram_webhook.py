@@ -14,7 +14,7 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, Request
 
 from app.config.bot_routing import LOW_PRIORITY_BOT_NAMES
-from app.services.telegram_relay_client import TelegramRelayClient, TelegramSendError
+from app.services.media_proxy import proxy_tg_file
 from app.settings import settings
 from app.workers.queue import LOW_PRIORITY_QUEUE, push_task
 
@@ -93,20 +93,21 @@ async def telegram_webhook(
                 token = settings.TELEGRAM_BOT_TOKENS.get(bot_name)
                 file_url: str | None = None
                 if token and settings.TELEGRAM_RELAY_URL:
-                    try:
-                        file_url = await TelegramRelayClient(token).resolve_file_url(file_id)
-                    except TelegramSendError as e:
+                    # Скачиваем файл через relay и сохраняем на нашем сервере.
+                    # Передаём AMO наш PUBLIC_URL/media/... вместо api.telegram.org —
+                    # api.telegram.org заблокирован в РФ, AMO не может его скачать.
+                    file_url = await proxy_tg_file(file_id=file_id, token=token)
+                    if file_url is None:
                         logger.error(
-                            "TG_WEBHOOK: failed to resolve file_id=%s, bot=%s, media=%s, error=%s",
+                            "TG_WEBHOOK: failed to proxy file_id=%s, bot=%s, media=%s",
                             file_id,
                             bot_name,
                             media_kind,
-                            e,
                         )
                 else:
                     logger.warning(
                         "TG_WEBHOOK: no token/relay configured for bot=%s — "
-                        "cannot resolve media file_id=%s",
+                        "cannot proxy media file_id=%s",
                         bot_name,
                         file_id,
                     )
@@ -114,7 +115,7 @@ async def telegram_webhook(
                 if file_url:
                     attachments.append(file_url)
                 elif not message_text:
-                    # Ни ссылки на файл, ни подписи — хотя бы плейсхолдер,
+                    # Ни проксированной ссылки, ни подписи — хотя бы плейсхолдер,
                     # чтобы менеджер видел, что клиент прислал вложение.
                     message_text = _MEDIA_PLACEHOLDERS.get(media_kind, "[вложение]")
         elif "callback_query" in update:

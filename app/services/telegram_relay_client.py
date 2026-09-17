@@ -157,6 +157,62 @@ class TelegramRelayClient:
         except Exception as e:
             raise TelegramSendError(f"{type(e).__name__}: {e}") from e
 
+    async def fetch_file_bytes(self, file_id: str) -> tuple[bytes, str]:
+        """
+        Скачать файл из Telegram по file_id через relay и вернуть (байты, имя файла).
+
+        Основной бэкенд не может напрямую обратиться к api.telegram.org, поэтому
+        relay скачивает файл и возвращает его байты. Имя файла читается из
+        заголовка X-Filename ответа.
+
+        Используется чтобы сохранить файл на нашем сервере и отдать AMO URL
+        нашего хостинга (api.telegram.org заблокирован в РФ, AMO не может его скачать).
+
+        Args:
+            file_id: file_id из Telegram update
+
+        Returns:
+            Кортеж (байты файла, имя файла с расширением)
+
+        Raises:
+            TelegramSendError: Если relay недоступен или не смог скачать файл
+        """
+        if not settings.TELEGRAM_RELAY_URL:
+            raise TelegramSendError("TELEGRAM_RELAY_URL is not configured")
+
+        url = f"{settings.TELEGRAM_RELAY_URL.rstrip('/')}/download-file"
+
+        form = aiohttp.FormData()
+        form.add_field("token", self.token)
+        form.add_field("file_id", file_id)
+
+        headers = {"X-Relay-Secret": settings.TELEGRAM_RELAY_SECRET}
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    url,
+                    data=form,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=60),
+                ) as response:
+                    if response.status >= 400:
+                        detail = await response.text()
+                        raise TelegramSendError(f"{response.status}: {detail}")
+                    content = await response.read()
+                    filename = response.headers.get("X-Filename", f"{file_id}.bin")
+                    logger.info(
+                        "File fetched via relay: file_id=%s, filename=%s, %d bytes",
+                        file_id,
+                        filename,
+                        len(content),
+                    )
+                    return content, filename
+        except TelegramSendError:
+            raise
+        except Exception as e:
+            raise TelegramSendError(f"{type(e).__name__}: {e}") from e
+
     async def send_text(self, chat_id: str, text: str) -> None:
         """
         Отправить текстовое сообщение клиенту через relay.

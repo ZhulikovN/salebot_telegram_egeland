@@ -168,13 +168,12 @@ class Settings(BaseSettings):
 
     # Rate Limiting
     AMOCRM_MAX_REQUESTS_PER_SECOND: int = Field(
-        default=5,
         description="Максимальное количество запросов к AmoCRM API в секунду",
         ge=1,
         le=10,
     )
     UTM_AMOCRM_MAX_REQUESTS_PER_SECOND: int = Field(
-        default=5,
+        default=2,
         description="Лимит req/sec для отдельной интеграции utm_backfill_worker",
         ge=1,
         le=10,

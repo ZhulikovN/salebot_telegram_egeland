@@ -121,6 +121,56 @@ async def download_and_proxy(media_url: str) -> str | None:
     return public_url
 
 
+async def proxy_tg_file(file_id: str, token: str) -> str | None:
+    """
+    Скачать файл из Telegram через relay и вернуть публичный URL нашего сервера.
+
+    Используется для медиа от клиента (el_oge_diagnostika_bot и аналогичных ботов),
+    чтобы AMO мог скачать файл с нашего хостинга — api.telegram.org заблокирован
+    в РФ, поэтому передавать прямую ссылку на Telegram в amojo нельзя.
+
+    Поток:
+        file_id → relay скачивает байты с api.telegram.org →
+        байты сохраняются в /tmp/salebot_media/ →
+        возвращается PUBLIC_URL/media/{filename} (доступен AMO)
+
+    Args:
+        file_id: file_id из Telegram update
+        token:   токен бота (нужен relay для вызова Bot API)
+
+    Returns:
+        Публичный URL файла на нашем сервере или None при ошибке
+    """
+    # Импорт внутри функции во избежание циклических зависимостей.
+    from app.services.telegram_relay_client import TelegramRelayClient, TelegramSendError
+
+    _ensure_media_dir()
+    _cleanup_old_files()
+
+    try:
+        content, tg_filename = await TelegramRelayClient(token).fetch_file_bytes(file_id)
+    except TelegramSendError as e:
+        logger.error(
+            "Failed to fetch TG file via relay: file_id=%s, error=%s", file_id, e
+        )
+        return None
+
+    ext = _get_extension(tg_filename)
+    filename = f"{uuid.uuid4().hex}{ext}"
+
+    try:
+        (MEDIA_DIR / filename).write_bytes(content)
+    except Exception as e:
+        logger.error("Error saving TG media file %s: %s", filename, e, exc_info=True)
+        return None
+
+    public_url = f"{settings.PUBLIC_URL}/media/{filename}"
+    logger.info(
+        "TG media proxied: file_id=%s, %d bytes, url=%s", file_id, len(content), public_url
+    )
+    return public_url
+
+
 def get_media_path(filename: str) -> Path | None:
     """
     Получить путь к медиафайлу по имени.
