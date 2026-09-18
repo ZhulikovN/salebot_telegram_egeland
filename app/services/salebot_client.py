@@ -48,7 +48,8 @@ class SalebotClient:
 
         Salebot периодически отдаёт 502/503/504 — это временные сбои на их
         стороне. Без ретрая такое сообщение терялось бы безвозвратно, поэтому
-        эти ошибки повторяем с экспоненциальной задержкой. Ошибки вида 4xx
+        эти ошибки повторяем с экспоненциальной задержкой. Таймауты (asyncio.TimeoutError)
+        также считаются временными и ретраятся. Ошибки вида 4xx
         (например 404 client_not_found) не ретраим — они не временные, повтор
         их не исправит.
 
@@ -116,7 +117,7 @@ class SalebotClient:
                         except json.JSONDecodeError:
                             return {"status": "ok", "response": text}
 
-            except RetryableSalebotError as e:
+            except (RetryableSalebotError, asyncio.TimeoutError) as e:
                 last_error = e
                 logger.error(
                     "Salebot temporary error sending message (attempt %d/%d): client_id=%s, %s",
