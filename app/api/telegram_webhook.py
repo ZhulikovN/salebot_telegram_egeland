@@ -81,43 +81,54 @@ async def telegram_webhook(
         sender: dict[str, Any] | None = None
         message_text: str | None = None
         attachments: list[str] = []
+        is_bot_message = False
 
         if "message" in update:
             msg = update["message"]
-            sender = msg.get("from") or {}
+
+            # Сообщение может быть копией исходящего от самого бота (сценарий
+            # на сервере коллеги) — Telegram сам помечает это в from.is_bot.
+            # В этом случае from — это бот, а не ученик, поэтому ID/имя ученика
+            # берём из chat (для приватного чата chat.id — тот же ученик, и там
+            # же есть username/first_name/last_name — те же поля, что у from).
+            is_bot_message = bool((msg.get("from") or {}).get("is_bot"))
+            sender = (msg.get("chat") if is_bot_message else msg.get("from")) or {}
             message_text = msg.get("text") or msg.get("caption")
 
-            media = _extract_media_file_id(msg)
-            if media:
-                media_kind, file_id = media
-                token = settings.TELEGRAM_BOT_TOKENS.get(bot_name)
-                file_url: str | None = None
-                if token and settings.TELEGRAM_RELAY_URL:
-                    # Скачиваем файл через relay и сохраняем на нашем сервере.
-                    # Передаём AMO наш PUBLIC_URL/media/... вместо api.telegram.org —
-                    # api.telegram.org заблокирован в РФ, AMO не может его скачать.
-                    file_url = await proxy_tg_file(file_id=file_id, token=token)
-                    if file_url is None:
-                        logger.error(
-                            "TG_WEBHOOK: failed to proxy file_id=%s, bot=%s, media=%s",
-                            file_id,
+            # Договорились с Григорием (21.09.2026): для сообщений бота — только
+            # текст, файлы не проксируем и не пересылаем вложением.
+            if not is_bot_message:
+                media = _extract_media_file_id(msg)
+                if media:
+                    media_kind, file_id = media
+                    token = settings.TELEGRAM_BOT_TOKENS.get(bot_name)
+                    file_url: str | None = None
+                    if token and settings.TELEGRAM_RELAY_URL:
+                        # Скачиваем файл через relay и сохраняем на нашем сервере.
+                        # Передаём AMO наш PUBLIC_URL/media/... вместо api.telegram.org —
+                        # api.telegram.org заблокирован в РФ, AMO не может его скачать.
+                        file_url = await proxy_tg_file(file_id=file_id, token=token)
+                        if file_url is None:
+                            logger.error(
+                                "TG_WEBHOOK: failed to proxy file_id=%s, bot=%s, media=%s",
+                                file_id,
+                                bot_name,
+                                media_kind,
+                            )
+                    else:
+                        logger.warning(
+                            "TG_WEBHOOK: no token/relay configured for bot=%s — "
+                            "cannot proxy media file_id=%s",
                             bot_name,
-                            media_kind,
+                            file_id,
                         )
-                else:
-                    logger.warning(
-                        "TG_WEBHOOK: no token/relay configured for bot=%s — "
-                        "cannot proxy media file_id=%s",
-                        bot_name,
-                        file_id,
-                    )
 
-                if file_url:
-                    attachments.append(file_url)
-                elif not message_text:
-                    # Ни проксированной ссылки, ни подписи — хотя бы плейсхолдер,
-                    # чтобы менеджер видел, что клиент прислал вложение.
-                    message_text = _MEDIA_PLACEHOLDERS.get(media_kind, "[вложение]")
+                    if file_url:
+                        attachments.append(file_url)
+                    elif not message_text:
+                        # Ни проксированной ссылки, ни подписи — хотя бы плейсхолдер,
+                        # чтобы менеджер видел, что клиент прислал вложение.
+                        message_text = _MEDIA_PLACEHOLDERS.get(media_kind, "[вложение]")
         elif "callback_query" in update:
             cq = update["callback_query"]
             sender = cq.get("from") or {}
@@ -165,7 +176,7 @@ async def telegram_webhook(
                 "attachments": attachments,
                 "tg_username": tg_username,
                 "utm_data": {},
-                "is_bot_message": False,
+                "is_bot_message": is_bot_message,
             },
             queue_name=queue_name,
         )
