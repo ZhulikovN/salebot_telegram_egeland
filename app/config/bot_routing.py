@@ -332,6 +332,21 @@ _BOT_CONFIGS: dict[str, BotConfig] = {
             ("Перехожу в 8-й класс",  809893, 1378767),
         ),
     ),
+    "el_oge_math_bot": BotConfig(
+        pipeline_id=9472270,
+        status_id=75778598,
+        lead_name="Заявка: TG - @el_oge_math_bot",
+    ),
+    "el_oge_rus_bot": BotConfig(
+        pipeline_id=9472270,
+        status_id=75778598,
+        lead_name="Заявка: TG - @el_oge_rus_bot",
+    ),
+    "el_history_bot": BotConfig(
+        pipeline_id=9472270,
+        status_id=75778598,
+        lead_name="Заявка: TG - @el_history_bot",
+    ),
 }
 
 # Конфиг по умолчанию для всех остальных ботов (test_el_salebot и прочие)
