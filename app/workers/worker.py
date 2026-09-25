@@ -17,11 +17,7 @@ import sys
 
 from typing import Any
 
-from app.config.bot_routing import (
-    EL_OGE_DIAGNOSTIKA_CONSULT_PIPELINE_ID,
-    EL_OGE_DIAGNOSTIKA_CONSULT_STATUS_ID,
-    EL_OGE_DIAGNOSTIKA_GRADE_ENUM,
-)
+from app.config.bot_routing import EL_OGE_DIAGNOSTIKA_GRADE_ENUM
 from app.services.amocrm_client import RetryableAmoCRMError
 from app.services.conversation_manager import ConversationManager
 from app.services.salebot_client import RetryableSalebotError
@@ -598,11 +594,10 @@ async def process_lead_event(data: dict) -> None:
 
     Сделка уже существует (создана с первого касания, lead_id найден заранее
     в app/api/lead_webhook.py по своей БД). Здесь:
-    1. Переносим сделку в целевую воронку/этап (move_lead).
-    2. Заполняем поля сделки: "Класс" (select, settings.FIELD_GRADE),
+    1. Заполняем поля сделки: "Класс" (select, settings.FIELD_GRADE),
        "Промокод" (текст, settings.FIELD_PROMO_CODE), UTM-метки (те же поля,
        что и при создании сделки).
-    3. Добавляем примечание со ВСЕЙ информацией из события целиком (тип
+    2. Добавляем примечание со ВСЕЙ информацией из события целиком (тип
        обращения, класс, предмет(ы), результат диагностики, промокод,
        источник, UTM, экран нажатия, их внутренний ID заявки) — включая
        класс/промокод/UTM, которые уже пытались записать в поля выше. Это
@@ -610,12 +605,28 @@ async def process_lead_event(data: dict) -> None:
        нераспознанное значение класса и т.п.), данные не потеряются —
        менеджер всё равно увидит их текстом в примечании.
 
+    Перенос сделки в другую воронку (move_lead) здесь принципиально НЕ
+    делается — договорённость с Григорием Коневым 25.09.2026: единственный
+    путь переноса el_oge_diagnostika_bot → воронка БОТы — это старт
+    el_personal_bot (см. diag_start в ConversationManager.handle_salebot_message).
+    Если делать перенос ещё и здесь, по кнопке "Получить консультацию" —
+    получается два независимых пути с одинаковым результатом, но которые
+    могут сработать в любом порядке и независимо от текущего этапа сделки:
+    старая кнопка может откатить сделку, которую менеджер уже продвинул
+    вперёд (move_lead не проверяет текущий этап), а если в момент нажатия
+    склейка с el_personal_bot ещё не произошла — получатся две отдельные
+    сделки на одного ученика с разными менеджерами. Чтобы так не рисковать,
+    Григорий убирает старую кнопку "Получить консультацию" на своей
+    стороне: при нажатии старой кнопки в уже отправленных сообщениях и
+    старых PDF его бот подставляет то же сообщение с той же deeplink-кнопкой
+    в el_personal_bot, что видят новые клиенты — путь остаётся ровно один.
+
     Каждый шаг обёрнут в собственный try/except — сбой в одном (например,
     неизвестное значение класса или упавший запрос на промокод) не должен
-    мешать выполнению остальных шагов и добавлению примечания. move_lead
-    и update_lead_enum сами не бросают исключений при ошибке AmoCRM
-    (логируют предупреждение) — это осознанно best-effort операция,
-    повторный вызов с тем же lead_id безопасен.
+    мешать выполнению остальных шагов и добавлению примечания.
+    update_lead_enum сам не бросает исключений при ошибке AmoCRM (логирует
+    предупреждение) — это осознанно best-effort операция, повторный вызов
+    с тем же lead_id безопасен.
 
     Перед любыми операциями проверяем, жива ли сделка (get_lead) — та же
     проверка, что используется в обычном потоке сообщений
@@ -675,7 +686,51 @@ async def process_lead_event(data: dict) -> None:
                     conversation.lead_id, lead_id,
                 )
                 lead_id = conversation.lead_id
+            elif lead == {}:
+                # Сделка поглощена (204) — значит произошло слияние в AmoCRM.
+                # По правилам AmoCRM: при слиянии двух активных сделок выживает
+                # та, что создана раньше. Для el_oge_diagnostika_bot это означает,
+                # что сделка была слита с более старой сделкой el_personal_bot.
+                # Ищем conversation для el_personal_bot с тем же platform_id —
+                # именно она хранит lead_id выжившей объединённой карточки.
+                personal_conv = await manager.storage.get_by_platform_id(
+                    platform_id, "el_personal_bot"
+                )
+                if personal_conv and personal_conv.lead_id:
+                    logger.info(
+                        "LEAD_EVENT: deal absorbed (merged into el_personal_bot), "
+                        "redirecting note to lead_id=%s (was %s, bot=%s)",
+                        personal_conv.lead_id, lead_id, bot_name,
+                    )
+                    lead_id = personal_conv.lead_id
+                else:
+                    # Нет conversation el_personal_bot — неожиданная ситуация,
+                    # переоткрываем диалог как обычно.
+                    logger.warning(
+                        "LEAD_EVENT: deal absorbed but no el_personal_bot conversation "
+                        "found for platform_id=%s — reopening new conversation",
+                        platform_id,
+                    )
+                    reopened = await manager._reopen_conversation(
+                        conversation=conversation,
+                        platform_id=platform_id,
+                        bot_name=bot_name,
+                        salebot_client_id=conversation.salebot_client_id,
+                        client_name=conversation.client_name or "Ученик",
+                        tg_username=conversation.tg_username,
+                        utm_data=None,
+                    )
+                    if not reopened or not reopened.lead_id:
+                        logger.error(
+                            "LEAD_EVENT: failed to reopen conversation, platform_id=%s, "
+                            "bot=%s — skip event",
+                            platform_id, bot_name,
+                        )
+                        return
+                    lead_id = reopened.lead_id
+                    logger.info("LEAD_EVENT: conversation reopened, new lead_id=%s", lead_id)
             else:
+                # Сделка не найдена (404) — удалена, переоткрываем как обычно.
                 reopened = await manager._reopen_conversation(
                     conversation=conversation,
                     platform_id=platform_id,
@@ -695,29 +750,9 @@ async def process_lead_event(data: dict) -> None:
                 lead_id = reopened.lead_id
                 logger.info("LEAD_EVENT: conversation reopened, new lead_id=%s", lead_id)
 
-        # Флаг "новая заявка или обновление существующей".
-        # created=True/None  → первая заявка от клиента, полный набор действий.
-        # created=False      → клиент повторно нажал "Получить консультацию"
-        #                       (например, добавил новый предмет). Заявка та же,
-        #                       lead_id тот же — сделку не двигаем (менеджер
-        #                       уже мог продвинуть её вперёд, откатывать нельзя),
-        #                       только добавляем примечание с новым контекстом.
-        is_new_request = data.get("created") is not False
+        logger.info("LEAD_EVENT: lead_id=%s, created=%r", lead_id, data.get("created"))
 
-        logger.info(
-            "LEAD_EVENT: lead_id=%s, is_new_request=%s (created=%r)",
-            lead_id, is_new_request, data.get("created"),
-        )
-
-        # 1. Перенос в целевую воронку/этап — только для новой заявки.
-        if is_new_request:
-            await amocrm.move_lead(
-                lead_id=lead_id,
-                pipeline_id=EL_OGE_DIAGNOSTIKA_CONSULT_PIPELINE_ID,
-                status_id=EL_OGE_DIAGNOSTIKA_CONSULT_STATUS_ID,
-            )
-
-        # 2. Класс — select-поле 809893. Отдельный try, чтобы неизвестное
+        # 1. Класс — select-поле 809893. Отдельный try, чтобы неизвестное
         # значение класса или сбой запроса не блокировали промокод/UTM/примечание.
         grade = data.get("grade")
         if grade:
@@ -738,7 +773,7 @@ async def process_lead_event(data: dict) -> None:
                     lead_id, grade,
                 )
 
-        # 3. Промокод — текстовое поле 793154.
+        # 2. Промокод — текстовое поле 793154.
         promo = data.get("promo")
         if promo:
             try:
@@ -748,7 +783,7 @@ async def process_lead_event(data: dict) -> None:
                     "LEAD_EVENT: failed to set promo field, lead_id=%s, error=%s", lead_id, e
                 )
 
-        # 4. UTM — переиспользуем те же поля, что и при создании сделки.
+        # 3. UTM — переиспользуем те же поля, что и при создании сделки.
         utm = data.get("utm")
         if isinstance(utm, dict):
             utm_field_map = {
@@ -767,7 +802,7 @@ async def process_lead_event(data: dict) -> None:
                         "LEAD_EVENT: failed to set UTM fields, lead_id=%s, error=%s", lead_id, e
                     )
 
-        # 5. Примечание — дублируем ВСЮ информацию из события текстом, включая
+        # 4. Примечание — дублируем ВСЮ информацию из события текстом, включая
         # класс/промокод/UTM (которые выше уже пытались записать в поля).
         # Сделано намеренно как страховка: если запись в поле выше не удалась
         # (ошибка AmoCRM, неизвестное значение класса и т.п.) — данные всё
