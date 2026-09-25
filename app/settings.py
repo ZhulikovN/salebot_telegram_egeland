@@ -176,6 +176,18 @@ class Settings(BaseSettings):
         description="Публичный URL сервера (например: https://example.com) без слеша в конце"
     )
 
+    # Партнёрская аналитика (Григорий Конев, egeinformatika.ru)
+    # Слать только lead_created для el_personal_bot с start=diag_*.
+    # Пока секрет не получен — оставить пустым, отправка автоматически отключится.
+    PARTNER_ANALYTICS_URL: str = Field(
+        default="",
+        description="URL партнёрского эндпоинта аналитики (POST /api/partner/event)",
+    )
+    PARTNER_ANALYTICS_SECRET: str = Field(
+        default="",
+        description="Секрет для заголовка X-Webhook-Secret партнёрского эндпоинта",
+    )
+
     # Rate Limiting
     AMOCRM_MAX_REQUESTS_PER_SECOND: int = Field(
         description="Максимальное количество запросов к AmoCRM API в секунду",
