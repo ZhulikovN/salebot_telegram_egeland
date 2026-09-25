@@ -235,29 +235,42 @@ class ConversationManager:
                 # создания сделки el_personal_bot ниже не важен: AmoCRM
                 # определяет "старшую" сделку по дате создания, а не по
                 # текущей воронке. move_lead — best-effort, сам не бросает
-                # исключений при ошибке AmoCRM.
-                diag_conversation = await self.storage.get_by_platform_id(
-                    platform_id, "el_oge_diagnostika_bot"
-                )
-                if diag_conversation and diag_conversation.lead_id:
-                    logger.info(
-                        "diag_start=%r: moving el_oge_diagnostika_bot lead %s to "
-                        "БОТы pipeline (platform_id=%s)",
-                        diag_start,
-                        diag_conversation.lead_id,
-                        platform_id,
+                # исключений при ошибке AmoCRM. Весь блок в try/except —
+                # это доп. перенос, а не обязательный шаг: сбой поиска/БД
+                # здесь не должен мешать созданию сделки el_personal_bot
+                # и доставке сообщения клиента (см. тот же принцип у
+                # utm_check_needed/notify_lead_created выше по функции).
+                try:
+                    diag_conversation = await self.storage.get_by_platform_id(
+                        platform_id, "el_oge_diagnostika_bot"
                     )
-                    await self.amocrm.move_lead(
-                        lead_id=diag_conversation.lead_id,
-                        pipeline_id=EL_OGE_DIAGNOSTIKA_CONSULT_PIPELINE_ID,
-                        status_id=EL_OGE_DIAGNOSTIKA_CONSULT_STATUS_ID,
-                    )
-                else:
-                    logger.info(
-                        "diag_start=%r: no el_oge_diagnostika_bot conversation with "
-                        "lead_id found for platform_id=%s, nothing to move",
+                    if diag_conversation and diag_conversation.lead_id:
+                        logger.info(
+                            "diag_start=%r: moving el_oge_diagnostika_bot lead %s to "
+                            "БОТы pipeline (platform_id=%s)",
+                            diag_start,
+                            diag_conversation.lead_id,
+                            platform_id,
+                        )
+                        await self.amocrm.move_lead(
+                            lead_id=diag_conversation.lead_id,
+                            pipeline_id=EL_OGE_DIAGNOSTIKA_CONSULT_PIPELINE_ID,
+                            status_id=EL_OGE_DIAGNOSTIKA_CONSULT_STATUS_ID,
+                        )
+                    else:
+                        logger.info(
+                            "diag_start=%r: no el_oge_diagnostika_bot conversation with "
+                            "lead_id found for platform_id=%s, nothing to move",
+                            diag_start,
+                            platform_id,
+                        )
+                except Exception as e:
+                    logger.warning(
+                        "diag_start=%r: failed to move el_oge_diagnostika_bot lead for "
+                        "platform_id=%s, continuing without it: %s",
                         diag_start,
                         platform_id,
+                        e,
                     )
 
             try:
