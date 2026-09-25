@@ -1,10 +1,17 @@
 """Менеджер диалогов Salebot ↔ amoCRM."""
+import asyncio
 import logging
 from uuid import uuid4
 
 import aiohttp
 
-from app.config.bot_routing import SALEBOT_PRO_TAG_ID, get_bot_config
+from app.config.bot_routing import (
+    EL_OGE_DIAGNOSTIKA_CONSULT_PIPELINE_ID,
+    EL_OGE_DIAGNOSTIKA_CONSULT_STATUS_ID,
+    SALEBOT_PRO_TAG_ID,
+    get_bot_config,
+)
+from app.services.partner_notify import notify_lead_created
 from app.db.storage import Conversation, get_conversation_storage
 from app.services.amocrm_client import AmoCRMClient, RateLimitAmoCRMError, RetryableAmoCRMError
 from app.services.amojo_client import AmojoClient, AmojoNotFoundError
@@ -203,6 +210,56 @@ class ConversationManager:
                 platform_id,
                 bot_name,
             )
+            # Извлекаем diag_start, если пользователь пришёл через deeplink
+            # ?start=diag_* из диагностического бота коллеги (только el_personal_bot).
+            diag_start: str | None = None
+            if bot_name == "el_personal_bot":
+                text = (message_text or "").strip()
+                # Salebot передаёт параметр start без префикса "/start",
+                # например "diag_oge" или "diagoge" (зависит от версии Salebot).
+                # Проверяем обе формы: со слешем и без.
+                candidate = text.removeprefix("/start").strip()
+                if candidate.startswith("diag"):
+                    diag_start = candidate
+
+            if diag_start:
+                # Клиент пришёл в el_personal_bot по deeplink из
+                # el_oge_diagnostika_bot. Ниже el_personal_bot создаст свою
+                # сделку в воронке БОТы (тот же контакт) — и AmoCRM сам
+                # склеит её со сделкой диагностики, потому что та старше и
+                # активна (выживает более старая сделка, см. правило
+                # склейки, договорённость с Григорием Коневым 25.09.2026).
+                # Чтобы итоговая (выжившая) сделка оказалась в воронке БОТы,
+                # а не осталась в тестовой воронке диагностики — переносим
+                # сделку диагностики в БОТы заранее. Порядок относительно
+                # создания сделки el_personal_bot ниже не важен: AmoCRM
+                # определяет "старшую" сделку по дате создания, а не по
+                # текущей воронке. move_lead — best-effort, сам не бросает
+                # исключений при ошибке AmoCRM.
+                diag_conversation = await self.storage.get_by_platform_id(
+                    platform_id, "el_oge_diagnostika_bot"
+                )
+                if diag_conversation and diag_conversation.lead_id:
+                    logger.info(
+                        "diag_start=%r: moving el_oge_diagnostika_bot lead %s to "
+                        "БОТы pipeline (platform_id=%s)",
+                        diag_start,
+                        diag_conversation.lead_id,
+                        platform_id,
+                    )
+                    await self.amocrm.move_lead(
+                        lead_id=diag_conversation.lead_id,
+                        pipeline_id=EL_OGE_DIAGNOSTIKA_CONSULT_PIPELINE_ID,
+                        status_id=EL_OGE_DIAGNOSTIKA_CONSULT_STATUS_ID,
+                    )
+                else:
+                    logger.info(
+                        "diag_start=%r: no el_oge_diagnostika_bot conversation with "
+                        "lead_id found for platform_id=%s, nothing to move",
+                        diag_start,
+                        platform_id,
+                    )
+
             try:
                 conversation = await self._create_new_conversation(
                     platform_id=platform_id,
@@ -211,6 +268,7 @@ class ConversationManager:
                     client_name=client_name,
                     tg_username=tg_username,
                     utm_data=utm_data,
+                    diag_start=diag_start,
                 )
             except Exception as e:
                 if "duplicate key value" in str(e) or "unique constraint" in str(e).lower():
@@ -385,6 +443,7 @@ class ConversationManager:
         client_name: str,
         tg_username: str | None,
         utm_data: dict | None = None,
+        diag_start: str | None = None,
     ):
         """
         Создать новый диалог: контакт → сделка → чат amojo → запись в БД.
@@ -458,6 +517,17 @@ class ConversationManager:
                     tag_ids=tag_ids,
                 )
                 logger.info("New lead created: lead_id=%s", lead_id)
+
+                # Уведомляем партнёрскую аналитику, если клиент пришёл через
+                # deeplink ?start=diag_* из диагностического бота (el_oge_diagnostika_bot).
+                if diag_start:
+                    asyncio.create_task(
+                        notify_lead_created(
+                            tg_id=platform_id,
+                            start=diag_start,
+                            amo_lead_id=lead_id,
+                        )
+                    )
 
             # Сохраняем lead_id в переменную amo_lead_id в профиле клиента Salebot
             # чтобы коллега мог подставить #{amo_lead_id} в ссылку на оплату.
@@ -993,6 +1063,12 @@ class ConversationManager:
                             conversation.bot_name,
                             e,
                         )
+                        # Уведомляем менеджера в примечании
+                        error_text = str(e).lower()
+                        if "blocked by the user" in error_text:
+                            await self._notify_manager_bot_blocked(
+                                conversation_id, conversation.lead_id
+                            )
                 else:
                     logger.warning(
                         "No token in TELEGRAM_BOT_TOKENS for bot=%s — "
