@@ -6,9 +6,16 @@ from app.settings import settings
 # Тег, который ставится на ВСЕ сделки из этой интеграции (Salebot-pro).
 SALEBOT_PRO_TAG_ID: int = 929163
 
-# Куда переносится сделка el_oge_diagnostika_bot при получении события
-# "заявка на консультацию" от сервера коллеги (см. app/api/lead_webhook.py).
-# Договорено в переписке с Григорием Коневым 17.09.2026.
+# Куда переносится сделка el_oge_diagnostika_bot при старте el_personal_bot
+# по deeplink ?start=diag_* (см. diag_start в
+# ConversationManager.handle_salebot_message, app/services/conversation_manager.py).
+# Это единственный путь переноса — событие lead_event (app/api/lead_webhook.py,
+# app/workers/worker.py.process_lead_event) сделку больше НЕ переносит:
+# договорено с Григорием Коневым 25.09.2026, чтобы не было двух независимых
+# путей переноса одной сделки (риск откатить уже продвинутую менеджером
+# сделку или получить дубль, если склейка с el_personal_bot не успела
+# произойти). Старые кнопки "Получить консультацию" в уже отправленных
+# сообщениях/PDF Григорий переводит на тот же deeplink на своей стороне.
 EL_OGE_DIAGNOSTIKA_CONSULT_PIPELINE_ID: int = 9472270
 EL_OGE_DIAGNOSTIKA_CONSULT_STATUS_ID: int = 75778594
 
@@ -235,9 +242,12 @@ _BOT_CONFIGS: dict[str, BotConfig] = {
     "el_oge_diagnostika_bot": BotConfig(
         # Тестовая воронка — сюда попадает сделка с первого касания (та же
         # воронка/этап, что и у skidki_el_bot, ВК-бота, El_School_Ege_bot).
-        # При событии "заявка на консультацию" от сервера коллеги сделка
-        # переносится в EL_OGE_DIAGNOSTIKA_CONSULT_PIPELINE_ID/STATUS_ID —
-        # см. app/api/lead_webhook.py.
+        # Перенос в EL_OGE_DIAGNOSTIKA_CONSULT_PIPELINE_ID/STATUS_ID происходит
+        # не отсюда, а при старте el_personal_bot по deeplink diag_start (см.
+        # ConversationManager.handle_salebot_message) — единственный путь,
+        # событие lead_event (app/api/lead_webhook.py) сделку не переносит
+        # (договорено с Григорием Коневым 25.09.2026, старые кнопки/PDF он
+        # переводит на тот же deeplink на своей стороне).
         pipeline_id=10195498,
         status_id=80731234,
         lead_name="Заявка: TG - @el_oge_diagnostika_bot",
