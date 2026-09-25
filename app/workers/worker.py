@@ -696,7 +696,20 @@ async def process_lead_event(data: dict) -> None:
                 personal_conv = await manager.storage.get_by_platform_id(
                     platform_id, "el_personal_bot"
                 )
+
+                # lead_id из БД el_personal_bot мог сам устареть — например,
+                # эту сделку тоже успели слить/удалить, а el_personal_bot
+                # давно не получал новых сообщений от клиента, чтобы это
+                # заметить и обновить БД (та проверка в handle_salebot_message
+                # ленивая, срабатывает только когда клиент пишет). Поэтому
+                # перед использованием проверяем живость через get_lead —
+                # иначе получаем ровно ту ошибку "Lead not found" на move_lead
+                # и add_lead_note, что была замечена в проде 25.09.2026.
+                personal_lead = None
                 if personal_conv and personal_conv.lead_id:
+                    personal_lead = await amocrm.get_lead(personal_conv.lead_id)
+
+                if personal_lead:
                     logger.info(
                         "LEAD_EVENT: deal absorbed (merged into el_personal_bot), "
                         "redirecting note to lead_id=%s (was %s, bot=%s)",
@@ -704,31 +717,67 @@ async def process_lead_event(data: dict) -> None:
                     )
                     lead_id = personal_conv.lead_id
                 else:
-                    # Нет conversation el_personal_bot — неожиданная ситуация,
-                    # переоткрываем диалог как обычно.
-                    logger.warning(
-                        "LEAD_EVENT: deal absorbed but no el_personal_bot conversation "
-                        "found for platform_id=%s — reopening new conversation",
-                        platform_id,
-                    )
-                    reopened = await manager._reopen_conversation(
-                        conversation=conversation,
-                        platform_id=platform_id,
-                        bot_name=bot_name,
-                        salebot_client_id=conversation.salebot_client_id,
-                        client_name=conversation.client_name or "Ученик",
-                        tg_username=conversation.tg_username,
-                        utm_data=None,
-                    )
-                    if not reopened or not reopened.lead_id:
+                    # Сохранённый lead_id el_personal_bot тоже неактуален (или
+                    # conversation вовсе нет) — ищем актуальную открытую сделку
+                    # контакта по ВСЕМ воронкам напрямую в AmoCRM, а не
+                    # доверяем кэшу в БД. Покрывает любую глубину цепочки
+                    # склеек, а не только "диагностика → el_personal_bot".
+                    if personal_conv and personal_conv.lead_id:
+                        logger.warning(
+                            "LEAD_EVENT: el_personal_bot lead_id=%s from DB is also "
+                            "stale (get_lead returned %s), searching by contact",
+                            personal_conv.lead_id,
+                            "None (404)" if personal_lead is None else "absorbed (204)",
+                        )
+                    else:
+                        logger.warning(
+                            "LEAD_EVENT: deal absorbed but no el_personal_bot conversation "
+                            "found for platform_id=%s — searching by contact",
+                            platform_id,
+                        )
+
+                    duplicate_lead = None
+                    if conversation.contact_id:
+                        try:
+                            duplicate_lead = await amocrm.check_duplicate_lead(
+                                contact_id=conversation.contact_id,
+                                pipeline_id=None,
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                "LEAD_EVENT: check_duplicate_lead failed for contact=%s: %s",
+                                conversation.contact_id, e,
+                            )
+
+                    if duplicate_lead:
+                        lead_id = duplicate_lead["id"]
+                        logger.info(
+                            "LEAD_EVENT: found live lead via contact search: lead_id=%s "
+                            "(contact=%s, bot=%s)",
+                            lead_id, conversation.contact_id, bot_name,
+                        )
+                    else:
+                        # Совсем ничего живого не нашли по контакту. Это
+                        # внутреннее аналитическое событие, а не сообщение
+                        # клиента — плодить здесь новую сделку рискованнее
+                        # (см. предупреждение Григория про дубли/двух
+                        # менеджеров на одного ученика), чем один раз
+                        # потерять примечание. Пропускаем событие, но
+                        # логируем как ERROR с отдельным тегом
+                        # LEAD_EVENT_NOTE_LOST, чтобы такие случаи было
+                        # легко найти (grep по тегу) и посчитать, часто ли
+                        # повторяется — если да, логику нужно пересмотреть.
                         logger.error(
-                            "LEAD_EVENT: failed to reopen conversation, platform_id=%s, "
-                            "bot=%s — skip event",
-                            platform_id, bot_name,
+                            "LEAD_EVENT_NOTE_LOST: no live lead found anywhere for "
+                            "contact=%s, platform_id=%s, original_lead_id=%s, bot=%s, "
+                            "kind=%s — note NOT added, event skipped",
+                            conversation.contact_id,
+                            platform_id,
+                            data.get("lead_id"),
+                            bot_name,
+                            data.get("kind"),
                         )
                         return
-                    lead_id = reopened.lead_id
-                    logger.info("LEAD_EVENT: conversation reopened, new lead_id=%s", lead_id)
             else:
                 # Сделка не найдена (404) — удалена, переоткрываем как обычно.
                 reopened = await manager._reopen_conversation(
