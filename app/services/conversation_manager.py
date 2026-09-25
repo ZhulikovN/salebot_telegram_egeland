@@ -103,6 +103,74 @@ class ConversationManager:
         """
         conversation = await self.storage.get_by_platform_id(platform_id, bot_name)
 
+        # Извлекаем diag_start, если пользователь пришёл через deeplink
+        # ?start=diag_* из диагностического бота коллеги (только el_personal_bot).
+        # Проверка и перенос сделки диагностики — БЕЗУСЛОВНЫЕ, не только для
+        # первого сообщения: если диалог el_personal_bot уже существовал
+        # (например, старый клиент, ранее что-то писавший этому боту), но
+        # клиент сейчас пришёл именно по diag-deeplink — сделку диагностики
+        # всё равно нужно перенести. Раньше это было внутри "if not
+        # conversation" и не срабатывало для reopen/уже существующих
+        # диалогов — баг, найденный на тесте 25.09.2026 (см. лог: "Duplicate
+        # lead found on reopen" без единой строки diag_start — блок просто
+        # не выполнялся, потому что диалог el_personal_bot уже существовал).
+        diag_start: str | None = None
+        if bot_name == "el_personal_bot":
+            text = (message_text or "").strip()
+            # Salebot передаёт параметр start без префикса "/start",
+            # например "diag_oge" или "diagoge" (зависит от версии Salebot).
+            # Проверяем обе формы: со слешем и без.
+            candidate = text.removeprefix("/start").strip()
+            if candidate.startswith("diag"):
+                diag_start = candidate
+
+        if diag_start:
+            # Клиент пришёл в el_personal_bot по deeplink из
+            # el_oge_diagnostika_bot (в первый раз или повторно — не важно).
+            # el_personal_bot создаст/переиспользует свою сделку в воронке
+            # БОТы (тот же контакт) — и AmoCRM сам склеит её со сделкой
+            # диагностики, потому что та старше и активна (выживает более
+            # старая сделка, см. правило склейки, договорённость с
+            # Григорием Коневым 25.09.2026). Чтобы итоговая (выжившая)
+            # сделка оказалась в воронке БОТы, а не осталась в тестовой
+            # воронке диагностики — переносим сделку диагностики в БОТы
+            # заранее. move_lead — best-effort, сам не бросает исключений
+            # при ошибке AmoCRM. Весь блок в try/except — это доп. перенос,
+            # а не обязательный шаг: сбой поиска/БД здесь не должен мешать
+            # созданию/доставке сообщения клиента.
+            try:
+                diag_conversation = await self.storage.get_by_platform_id(
+                    platform_id, "el_oge_diagnostika_bot"
+                )
+                if diag_conversation and diag_conversation.lead_id:
+                    logger.info(
+                        "diag_start=%r: moving el_oge_diagnostika_bot lead %s to "
+                        "БОТы pipeline (platform_id=%s)",
+                        diag_start,
+                        diag_conversation.lead_id,
+                        platform_id,
+                    )
+                    await self.amocrm.move_lead(
+                        lead_id=diag_conversation.lead_id,
+                        pipeline_id=EL_OGE_DIAGNOSTIKA_CONSULT_PIPELINE_ID,
+                        status_id=EL_OGE_DIAGNOSTIKA_CONSULT_STATUS_ID,
+                    )
+                else:
+                    logger.info(
+                        "diag_start=%r: no el_oge_diagnostika_bot conversation with "
+                        "lead_id found for platform_id=%s, nothing to move",
+                        diag_start,
+                        platform_id,
+                    )
+            except Exception as e:
+                logger.warning(
+                    "diag_start=%r: failed to move el_oge_diagnostika_bot lead for "
+                    "platform_id=%s, continuing without it: %s",
+                    diag_start,
+                    platform_id,
+                    e,
+                )
+
         # current_lead — данные сделки из get_lead, переиспользуются для pipeline_triggers
         # чтобы не делать лишний GET-запрос.
         current_lead: dict | None = None
@@ -138,6 +206,7 @@ class ConversationManager:
                     client_name=client_name,
                     tg_username=tg_username,
                     utm_data=utm_data,
+                    diag_start=diag_start,
                 )
                 # После reopen новая сделка создана в начальной воронке бота.
                 # Устанавливаем current_lead чтобы pipeline_triggers могли сработать.
@@ -210,69 +279,10 @@ class ConversationManager:
                 platform_id,
                 bot_name,
             )
-            # Извлекаем diag_start, если пользователь пришёл через deeplink
-            # ?start=diag_* из диагностического бота коллеги (только el_personal_bot).
-            diag_start: str | None = None
-            if bot_name == "el_personal_bot":
-                text = (message_text or "").strip()
-                # Salebot передаёт параметр start без префикса "/start",
-                # например "diag_oge" или "diagoge" (зависит от версии Salebot).
-                # Проверяем обе формы: со слешем и без.
-                candidate = text.removeprefix("/start").strip()
-                if candidate.startswith("diag"):
-                    diag_start = candidate
-
-            if diag_start:
-                # Клиент пришёл в el_personal_bot по deeplink из
-                # el_oge_diagnostika_bot. Ниже el_personal_bot создаст свою
-                # сделку в воронке БОТы (тот же контакт) — и AmoCRM сам
-                # склеит её со сделкой диагностики, потому что та старше и
-                # активна (выживает более старая сделка, см. правило
-                # склейки, договорённость с Григорием Коневым 25.09.2026).
-                # Чтобы итоговая (выжившая) сделка оказалась в воронке БОТы,
-                # а не осталась в тестовой воронке диагностики — переносим
-                # сделку диагностики в БОТы заранее. Порядок относительно
-                # создания сделки el_personal_bot ниже не важен: AmoCRM
-                # определяет "старшую" сделку по дате создания, а не по
-                # текущей воронке. move_lead — best-effort, сам не бросает
-                # исключений при ошибке AmoCRM. Весь блок в try/except —
-                # это доп. перенос, а не обязательный шаг: сбой поиска/БД
-                # здесь не должен мешать созданию сделки el_personal_bot
-                # и доставке сообщения клиента (см. тот же принцип у
-                # utm_check_needed/notify_lead_created выше по функции).
-                try:
-                    diag_conversation = await self.storage.get_by_platform_id(
-                        platform_id, "el_oge_diagnostika_bot"
-                    )
-                    if diag_conversation and diag_conversation.lead_id:
-                        logger.info(
-                            "diag_start=%r: moving el_oge_diagnostika_bot lead %s to "
-                            "БОТы pipeline (platform_id=%s)",
-                            diag_start,
-                            diag_conversation.lead_id,
-                            platform_id,
-                        )
-                        await self.amocrm.move_lead(
-                            lead_id=diag_conversation.lead_id,
-                            pipeline_id=EL_OGE_DIAGNOSTIKA_CONSULT_PIPELINE_ID,
-                            status_id=EL_OGE_DIAGNOSTIKA_CONSULT_STATUS_ID,
-                        )
-                    else:
-                        logger.info(
-                            "diag_start=%r: no el_oge_diagnostika_bot conversation with "
-                            "lead_id found for platform_id=%s, nothing to move",
-                            diag_start,
-                            platform_id,
-                        )
-                except Exception as e:
-                    logger.warning(
-                        "diag_start=%r: failed to move el_oge_diagnostika_bot lead for "
-                        "platform_id=%s, continuing without it: %s",
-                        diag_start,
-                        platform_id,
-                        e,
-                    )
-
+            # diag_start уже вычислен и обработан (перенос сделки диагностики,
+            # если нужен) выше, безусловно, сразу после поиска conversation —
+            # здесь просто передаём его дальше в _create_new_conversation
+            # (используется там для partner-аналитики, notify_lead_created).
             try:
                 conversation = await self._create_new_conversation(
                     platform_id=platform_id,
@@ -617,6 +627,7 @@ class ConversationManager:
         client_name: str,
         tg_username: str | None,
         utm_data: dict | None,
+        diag_start: str | None = None,
     ) -> Conversation | None:
         """
         Переоткрыть диалог при закрытой/удалённой сделке.
@@ -632,6 +643,13 @@ class ConversationManager:
             client_name: Имя клиента
             tg_username: Telegram username (без @)
             utm_data: UTM-метки из Salebot
+            diag_start: Значение start=diag_* из deeplink, если клиент пришёл
+                из el_oge_diagnostika_bot — передаётся дальше в
+                notify_lead_created при создании новой сделки (см. тот же
+                параметр в _create_new_conversation). Диалог el_personal_bot
+                мог уже существовать в БД с прошлых сообщений клиента —
+                это не повод не отправлять партнёрскую аналитику, если
+                сейчас клиент реально создал новую сделку по diag-deeplink.
 
         Returns:
             Обновлённая запись Conversation или None при ошибке
@@ -734,6 +752,21 @@ class ConversationManager:
                     tag_ids=tag_ids,
                 )
                 logger.info("New lead created on reopen: lead_id=%s", lead_id)
+
+                # Уведомляем партнёрскую аналитику, если клиент пришёл через
+                # deeplink ?start=diag_* из диагностического бота — точно так
+                # же, как при создании новой сделки в _create_new_conversation.
+                # Диалог el_personal_bot мог уже существовать в БД (клиент
+                # писал раньше), но сделка сейчас создаётся впервые в этом
+                # запросе — событие lead_created для партнёра нужно отправить.
+                if diag_start:
+                    asyncio.create_task(
+                        notify_lead_created(
+                            tg_id=platform_id,
+                            start=diag_start,
+                            amo_lead_id=lead_id,
+                        )
+                    )
 
                 # # Создаём новый amojo-чат: старый привязан к закрытому лиду в AmoCRM
                 # # и сообщения продолжат уходить туда, даже если мы обновили lead_id в БД.
