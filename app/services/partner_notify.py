@@ -69,10 +69,28 @@ async def notify_lead_created(
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as resp:
                     if resp.status == 200:
+                        # Партнёр всегда отвечает {"ok": true, "result": "..."},
+                        # где result — что реально произошло на его стороне:
+                        # "заявка записана", "человека нет в диагностике",
+                        # "чужая метка" (start не начинается с diag),
+                        # "уже записана" (повтор по тому же номеру сделки).
+                        # Логируем result, чтобы не ходить за этим к партнёру
+                        # каждый раз — тело парсим отдельным try, чтобы ошибка
+                        # парсинга (не JSON/другой формат) не помешала считать
+                        # отправку успешной, раз статус уже 200.
+                        result = None
+                        try:
+                            resp_data = await resp.json()
+                            result = resp_data.get("result")
+                        except Exception as parse_exc:
+                            logger.debug(
+                                "PARTNER_NOTIFY: could not parse 200 response body: %s",
+                                parse_exc,
+                            )
                         logger.info(
                             "PARTNER_NOTIFY: lead_created sent: tg_id=%s, start=%r, "
-                            "amo_lead_id=%s",
-                            tg_id, start, amo_lead_id,
+                            "amo_lead_id=%s, result=%r",
+                            tg_id, start, amo_lead_id, result,
                         )
                         return
                     body = await resp.text()
