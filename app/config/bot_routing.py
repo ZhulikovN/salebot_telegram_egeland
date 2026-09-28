@@ -357,6 +357,16 @@ _BOT_CONFIGS: dict[str, BotConfig] = {
         status_id=75778598,
         lead_name="Заявка: TG - @el_history_bot",
     ),
+    "el_ege_masha_bot": BotConfig(
+        pipeline_id=9472270,
+        status_id=75778598,
+        lead_name="Заявка: TG - @el_ege_masha_bot",
+    ),
+    "el_ege_gelya_bot": BotConfig(
+        pipeline_id=9472270,
+        status_id=75778598,
+        lead_name="Заявка: TG - @el_ege_gelya_bot",
+    ),
 }
 
 # Конфиг по умолчанию для всех остальных ботов (test_el_salebot и прочие)
