@@ -155,6 +155,27 @@ class ConversationManager:
                         pipeline_id=EL_OGE_DIAGNOSTIKA_CONSULT_PIPELINE_ID,
                         status_id=EL_OGE_DIAGNOSTIKA_CONSULT_STATUS_ID,
                     )
+
+                    # Уведомляем партнёрскую аналитику здесь же, сразу после
+                    # переноса — а не в момент создания сделки el_personal_bot.
+                    # Причина: цель переноса — чтобы собственная проверка
+                    # дублей el_personal_bot (check_duplicate_lead по
+                    # pipeline_id=БОТы) нашла именно эту перенесённую сделку
+                    # и переиспользовала её, а не создала новую. Поэтому в
+                    # норме create_lead для el_personal_bot вообще не
+                    # вызывается — а значит "уведомлять только при создании
+                    # новой сделки" означало бы почти никогда не уведомлять,
+                    # хотя diag_start успешно сработал. Проверено логами на
+                    # тесте 25.09.2026: все 3 попытки нашли дубль и
+                    # переиспользовали перенесённую сделку, "New lead
+                    # created" для el_personal_bot не появлялось ни разу.
+                    asyncio.create_task(
+                        notify_lead_created(
+                            tg_id=platform_id,
+                            start=diag_start,
+                            amo_lead_id=diag_conversation.lead_id,
+                        )
+                    )
                 else:
                     logger.info(
                         "diag_start=%r: no el_oge_diagnostika_bot conversation with "
@@ -206,7 +227,6 @@ class ConversationManager:
                     client_name=client_name,
                     tg_username=tg_username,
                     utm_data=utm_data,
-                    diag_start=diag_start,
                 )
                 # После reopen новая сделка создана в начальной воронке бота.
                 # Устанавливаем current_lead чтобы pipeline_triggers могли сработать.
@@ -279,10 +299,9 @@ class ConversationManager:
                 platform_id,
                 bot_name,
             )
-            # diag_start уже вычислен и обработан (перенос сделки диагностики,
-            # если нужен) выше, безусловно, сразу после поиска conversation —
-            # здесь просто передаём его дальше в _create_new_conversation
-            # (используется там для partner-аналитики, notify_lead_created).
+            # diag_start уже вычислен и обработан (перенос сделки диагностики
+            # + уведомление партнёра, если нужно) выше, безусловно, сразу
+            # после поиска conversation — здесь он больше не нужен.
             try:
                 conversation = await self._create_new_conversation(
                     platform_id=platform_id,
@@ -291,7 +310,6 @@ class ConversationManager:
                     client_name=client_name,
                     tg_username=tg_username,
                     utm_data=utm_data,
-                    diag_start=diag_start,
                 )
             except Exception as e:
                 if "duplicate key value" in str(e) or "unique constraint" in str(e).lower():
@@ -466,7 +484,6 @@ class ConversationManager:
         client_name: str,
         tg_username: str | None,
         utm_data: dict | None = None,
-        diag_start: str | None = None,
     ):
         """
         Создать новый диалог: контакт → сделка → чат amojo → запись в БД.
@@ -540,17 +557,6 @@ class ConversationManager:
                     tag_ids=tag_ids,
                 )
                 logger.info("New lead created: lead_id=%s", lead_id)
-
-                # Уведомляем партнёрскую аналитику, если клиент пришёл через
-                # deeplink ?start=diag_* из диагностического бота (el_oge_diagnostika_bot).
-                if diag_start:
-                    asyncio.create_task(
-                        notify_lead_created(
-                            tg_id=platform_id,
-                            start=diag_start,
-                            amo_lead_id=lead_id,
-                        )
-                    )
 
             # Сохраняем lead_id в переменную amo_lead_id в профиле клиента Salebot
             # чтобы коллега мог подставить #{amo_lead_id} в ссылку на оплату.
@@ -627,7 +633,6 @@ class ConversationManager:
         client_name: str,
         tg_username: str | None,
         utm_data: dict | None,
-        diag_start: str | None = None,
     ) -> Conversation | None:
         """
         Переоткрыть диалог при закрытой/удалённой сделке.
@@ -643,13 +648,6 @@ class ConversationManager:
             client_name: Имя клиента
             tg_username: Telegram username (без @)
             utm_data: UTM-метки из Salebot
-            diag_start: Значение start=diag_* из deeplink, если клиент пришёл
-                из el_oge_diagnostika_bot — передаётся дальше в
-                notify_lead_created при создании новой сделки (см. тот же
-                параметр в _create_new_conversation). Диалог el_personal_bot
-                мог уже существовать в БД с прошлых сообщений клиента —
-                это не повод не отправлять партнёрскую аналитику, если
-                сейчас клиент реально создал новую сделку по diag-deeplink.
 
         Returns:
             Обновлённая запись Conversation или None при ошибке
@@ -752,21 +750,6 @@ class ConversationManager:
                     tag_ids=tag_ids,
                 )
                 logger.info("New lead created on reopen: lead_id=%s", lead_id)
-
-                # Уведомляем партнёрскую аналитику, если клиент пришёл через
-                # deeplink ?start=diag_* из диагностического бота — точно так
-                # же, как при создании новой сделки в _create_new_conversation.
-                # Диалог el_personal_bot мог уже существовать в БД (клиент
-                # писал раньше), но сделка сейчас создаётся впервые в этом
-                # запросе — событие lead_created для партнёра нужно отправить.
-                if diag_start:
-                    asyncio.create_task(
-                        notify_lead_created(
-                            tg_id=platform_id,
-                            start=diag_start,
-                            amo_lead_id=lead_id,
-                        )
-                    )
 
                 # # Создаём новый amojo-чат: старый привязан к закрытому лиду в AmoCRM
                 # # и сообщения продолжат уходить туда, даже если мы обновили lead_id в БД.
