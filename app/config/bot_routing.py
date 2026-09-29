@@ -67,6 +67,46 @@ _TG_BOTS_STAGE_ORDER: dict[int, int] = {
     143:      4,  # Закрыто и не реализовано
 }
 
+# Триггеры движения по этапам воронки "ТГ БОТы" (id 9472270) — ТЗ от
+# 28.09.2026. Полностью заменяют старую логику (названия кнопок в боте
+# изменились, сделки перестали двигаться). Названия кнопок скопированы из
+# ТЗ буквально — в некоторых словах вместо кириллических букв стоят
+# латинские (например "Кyпить курс" и "Купить кyрс" — это два РАЗНЫХ текста
+# с разными английскими буквами внутри, не опечатка), т.к. это нужно самому
+# боту. Менять буквы на кириллические нельзя — сравнение точное, по строке.
+# Правило "не двигать назад" обеспечивается через stage_order=_TG_BOTS_STAGE_ORDER
+# (ранги: 75778626=1, 75778630=2, 75778658=3 — уже заданы выше).
+_SALES_PIPELINE_TRIGGERS: tuple[tuple[str, int, int], ...] = (
+    # → этап 75778626 ("Ответ")
+    ("Узнать о курсе",      9472270, 75778626),
+    ("Узнать подробности",  9472270, 75778626),
+    ("Узнать о подготовке", 9472270, 75778626),
+    ("Задать вопрос",       9472270, 75778626),
+    ("Другой вопрос",       9472270, 75778626),
+    ("Есть вопросы",        9472270, 75778626),
+    ("Позвать человека",    9472270, 75778626),
+    ("Позвать менеджера",   9472270, 75778626),
+    # → этап 75778630 ("Выставил оффер")
+    ("Узнать цены",       9472270, 75778630),
+    ("Переходим к ценам", 9472270, 75778630),
+    ("Перейти к ценам",   9472270, 75778630),
+    ("Идем к ценам",      9472270, 75778630),
+    ("Кyпить курс",       9472270, 75778630),  # латинская "y" в "Кyпить"
+    # → этап 75778658 ("Реквизиты выставлены")
+    ("Купить кyрс",            9472270, 75778658),  # латинская "y" в "кyрс"
+    ("Хочу 1 предмет",         9472270, 75778658),
+    ("Хочу комплексно",        9472270, 75778658),
+    ("Оставим 1 предмет",      9472270, 75778658),
+    ("Хочу 2 предмета",        9472270, 75778658),
+    ("Оставим 2 предмета",     9472270, 75778658),
+    ("Запишусь на 3 предмета", 9472270, 75778658),
+    ("Беру 3 предмета",        9472270, 75778658),
+    ("Беру 4 предмета",        9472270, 75778658),
+    ("Залетаю на 2 предмета",  9472270, 75778658),
+    ("Залетаю на 3 предмета",  9472270, 75778658),
+    ("Залетаю на 4 предмета",  9472270, 75778658),
+)
+
 
 @dataclass(frozen=True)
 class BotConfig:
@@ -160,6 +200,8 @@ _BOT_CONFIGS: dict[str, BotConfig] = {
         status_id=75778598,
         lead_name="Заявка: MAX - @el_personal_bot",
         platform_id_field=settings.FIELD_MAX_USER_ID,
+        pipeline_triggers=_SALES_PIPELINE_TRIGGERS,
+        stage_order=_TG_BOTS_STAGE_ORDER,
     ),
     # Instagram
     "bio_el_oge": BotConfig(
@@ -298,13 +340,7 @@ _BOT_CONFIGS: dict[str, BotConfig] = {
         pipeline_id=9472270,
         status_id=75778598,
         lead_name="Заявка: TG - @el_personal_bot",
-        pipeline_triggers=(
-            ("Купить курс",        9472270, 75778658),
-            ("Есть вопросики",     9472270, 75778626),
-            ("Позвать человека",   9472270, 75778626),
-            ("Узнать подробности", 9472270, 75778630),
-            ("Занять место",       9472270, 75778658),
-        ),
+        pipeline_triggers=_SALES_PIPELINE_TRIGGERS,
         stage_order=_TG_BOTS_STAGE_ORDER,
         keywords=(
             ("купить курс",        907137),   # тег КУПИТЬ КУРС
@@ -346,26 +382,36 @@ _BOT_CONFIGS: dict[str, BotConfig] = {
         pipeline_id=9472270,
         status_id=75778598,
         lead_name="Заявка: TG - @el_oge_math_bot",
+        pipeline_triggers=_SALES_PIPELINE_TRIGGERS,
+        stage_order=_TG_BOTS_STAGE_ORDER,
     ),
     "el_oge_rus_bot": BotConfig(
         pipeline_id=9472270,
         status_id=75778598,
         lead_name="Заявка: TG - @el_oge_rus_bot",
+        pipeline_triggers=_SALES_PIPELINE_TRIGGERS,
+        stage_order=_TG_BOTS_STAGE_ORDER,
     ),
     "el_history_bot": BotConfig(
         pipeline_id=9472270,
         status_id=75778598,
         lead_name="Заявка: TG - @el_history_bot",
+        pipeline_triggers=_SALES_PIPELINE_TRIGGERS,
+        stage_order=_TG_BOTS_STAGE_ORDER,
     ),
     "el_ege_masha_bot": BotConfig(
         pipeline_id=9472270,
         status_id=75778598,
         lead_name="Заявка: TG - @el_ege_masha_bot",
+        pipeline_triggers=_SALES_PIPELINE_TRIGGERS,
+        stage_order=_TG_BOTS_STAGE_ORDER,
     ),
     "el_ege_gelya_bot": BotConfig(
         pipeline_id=9472270,
         status_id=75778598,
         lead_name="Заявка: TG - @el_ege_gelya_bot",
+        pipeline_triggers=_SALES_PIPELINE_TRIGGERS,
+        stage_order=_TG_BOTS_STAGE_ORDER,
     ),
 }
 
