@@ -233,11 +233,14 @@ async def process_salebot_message(data: dict) -> None:
             for msg in messages:
                 try:
                     if msg.get("is_bot_message"):
-                        # Сообщение от бота — пересылаем в amojo с отправителем "Бот"
+                        # Сообщение от бота — пересылаем в amojo с отправителем "Бот".
+                        # attachments — например, голосовое дожимное сообщение
+                        # (ТЗ от 29.09.2026): пересылаются так же, как текст.
                         await manager.handle_bot_message(
                             platform_id=msg["platform_id"],
                             bot_name=msg["bot_name"],
                             message_text=msg["message_text"] or "",
+                            attachments=msg.get("attachments") or [],
                         )
                         logger.debug(
                             "Bot message forwarded: platform_id=%s, bot=%s",

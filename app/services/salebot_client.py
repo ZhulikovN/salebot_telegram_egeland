@@ -98,7 +98,7 @@ class SalebotClient:
                     ) as response:
                         text = await response.text()
 
-                        if response.status in (502, 503, 504):
+                        if response.status >= 500:
                             raise RetryableSalebotError(
                                 f"Salebot API error {response.status}: {text[:200]}"
                             )

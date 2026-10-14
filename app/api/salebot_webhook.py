@@ -70,9 +70,12 @@ async def salebot_webhook(webhook: SalebotWebhook, request: Request) -> dict[str
             )
             return {"status": "ignored", "reason": "manager_echo"}
 
-        # Сообщения бота без текста не несут смысла в amoCRM
-        if is_bot and not webhook.message:
-            logger.debug("Bot message without text, ignoring: %s", webhook.id)
+        # Сообщения бота без текста и без вложений не несут смысла в amoCRM.
+        # Голосовые/медиа дожимные сообщения бота приходят с пустым message,
+        # но с непустым attachments (ТЗ от 29.09.2026: прокидывать голосовые
+        # дожимные сообщения в AmoCRM так же, как текстовые) — их не отбрасываем.
+        if is_bot and not webhook.message and not webhook.attachments:
+            logger.debug("Bot message without text and attachments, ignoring: %s", webhook.id)
             return {"status": "ignored", "reason": "bot_message_no_text"}
 
         msg_preview = (webhook.message or "")[:50]

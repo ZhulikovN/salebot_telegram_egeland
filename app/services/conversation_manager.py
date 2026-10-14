@@ -964,6 +964,7 @@ class ConversationManager:
         platform_id: str,
         bot_name: str,
         message_text: str,
+        attachments: list[str] | None = None,
     ) -> None:
         """
         Переслать сообщение бота в amojo (отображается как второй участник диалога).
@@ -975,6 +976,11 @@ class ConversationManager:
             platform_id: Telegram ID клиента
             bot_name: Название бота
             message_text: Текст сообщения бота
+            attachments: Ссылки на вложения бота (например, голосовое дожимное
+                сообщение) — пересылаются отдельными сообщениями, тип (voice/
+                picture/video/file) определяется автоматически по расширению
+                ссылки (см. _get_amojo_media_type в amojo_client.py), так же
+                как для сообщений клиента в handle_salebot_message.
         """
         conversation = await self.storage.get_by_platform_id(platform_id, bot_name)
 
@@ -986,21 +992,63 @@ class ConversationManager:
             )
             return
 
-        from uuid import uuid4
-        await self.amojo.send_incoming_message(
-            conversation_id=conversation.conversation_id,
-            msgid=f"bot:{uuid4().hex}",
-            sender_id=f"tg:{platform_id}",
-            sender_name=conversation.client_name or platform_id,
-            text=message_text,
-            silent=True,
-        )
+        sender_name = conversation.client_name or platform_id
 
-        logger.info(
-            "Bot message forwarded to amojo: conversation=%s, bot=%s",
-            conversation.conversation_id,
-            bot_name,
-        )
+        if message_text:
+            await self.amojo.send_incoming_message(
+                conversation_id=conversation.conversation_id,
+                msgid=f"bot:{uuid4().hex}",
+                sender_id=f"tg:{platform_id}",
+                sender_name=sender_name,
+                text=message_text,
+                silent=True,
+            )
+            logger.info(
+                "Bot message forwarded to amojo: conversation=%s, bot=%s",
+                conversation.conversation_id,
+                bot_name,
+            )
+
+        valid_attachments = [
+            url for url in (attachments or []) if _is_valid_media_url(url)
+        ]
+        for media_url in valid_attachments:
+            try:
+                await self.amojo.send_incoming_message(
+                    conversation_id=conversation.conversation_id,
+                    msgid=f"bot:{uuid4().hex}",
+                    sender_id=f"tg:{platform_id}",
+                    sender_name=sender_name,
+                    text="",
+                    silent=True,
+                    media_url=media_url,
+                )
+                logger.info(
+                    "Bot attachment forwarded to amojo: conversation=%s, bot=%s, url=%s",
+                    conversation.conversation_id,
+                    bot_name,
+                    media_url,
+                )
+            except AmojoNotFoundError as e:
+                # Как и для клиентских вложений — если amojo отверг именно это
+                # сообщение (например, VALIDATION_ERROR по ссылке), пропускаем
+                # только его, не роняя обработку остального.
+                logger.error(
+                    "Bot attachment rejected by amojo, skipping: conversation=%s, "
+                    "bot=%s, url=%s, error=%s",
+                    conversation.conversation_id,
+                    bot_name,
+                    media_url,
+                    e,
+                )
+
+        if not message_text and not valid_attachments:
+            logger.debug(
+                "Bot message had no text and no valid attachments, nothing sent: "
+                "platform_id=%s, bot=%s",
+                platform_id,
+                bot_name,
+            )
 
     async def handle_amojo_message(
         self,
