@@ -22,6 +22,18 @@ class RetryableAmoCRMError(aiohttp.ClientError):
     pass
 
 
+class LeadNotFoundError(aiohttp.ClientError):
+    """
+    Сделка не найдена в AmoCRM (удалена/слита) — ПОСТОЯННАЯ ошибка.
+
+    В отличие от RetryableAmoCRMError, повтор запроса никогда не поможет.
+    Используется только fill_missing_utm_fields(raise_on_not_found=True)
+    для utm_backfill_worker — чтобы он мог сразу прекратить бесконечные
+    попытки раз в 5 минут вместо тихого проглатывания ошибки.
+    """
+    pass
+
+
 class RateLimitAmoCRMError(aiohttp.ClientError):
     """
     429 от AmoCRM — превышен лимит запросов.
@@ -804,17 +816,27 @@ class AmoCRMClient:
             logger.error("Error updating lead: %s", e)
             raise
 
-    async def fill_missing_utm_fields(self, lead_id: int, utm_data: dict) -> bool:
+    async def fill_missing_utm_fields(
+        self, lead_id: int, utm_data: dict, raise_on_not_found: bool = False
+    ) -> bool:
         """
         Дозаполнить пустые UTM-поля сделки (first-touch: не перезаписывает уже заполненные).
 
         Args:
             lead_id: ID сделки
             utm_data: UTM-метки {"utm_source": ..., "utm_medium": ..., ...}
+            raise_on_not_found: Если True — при ошибке "Lead not found" поднять
+                LeadNotFoundError вместо тихого return False. Нужно только
+                utm_backfill_worker, чтобы отличить "сделки больше нет, перестать
+                пытаться" от обычной временной ошибки. По умолчанию False —
+                поведение для остальных вызывающих (conversation_manager) не меняется.
 
         Returns:
             True если после этого вызова ВСЕ 5 UTM-полей заполнены (можно больше
             не проверять эту сделку), False если что-то ещё осталось пустым.
+
+        Raises:
+            LeadNotFoundError: если raise_on_not_found=True и сделка не найдена.
         """
         utm_field_map = {
             settings.FIELD_UTM_SOURCE:   utm_data.get("utm_source"),
@@ -845,6 +867,8 @@ class AmoCRMClient:
             )
             return all_filled
         except Exception as e:
+            if raise_on_not_found and "not found" in str(e).lower():
+                raise LeadNotFoundError(str(e)) from e
             logger.warning("Failed to fill UTM fields for lead %s: %s", lead_id, e)
             return False
 
