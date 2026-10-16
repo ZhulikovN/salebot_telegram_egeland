@@ -27,7 +27,7 @@ import logging
 import signal
 from typing import Any
 
-from app.services.amocrm_client import AmoCRMClient
+from app.services.amocrm_client import AmoCRMClient, LeadNotFoundError
 from app.services.salebot_client import SalebotClient
 from app.settings import settings
 from app.utils.redis_connection import get_redis
@@ -151,13 +151,26 @@ async def run_once(amocrm: AmoCRMClient, salebot: SalebotClient) -> None:
                 await redis.set(no_data_key, "1", ex=UTM_NO_DATA_TTL_SEC)
                 continue
 
-            all_filled = await amocrm.fill_missing_utm_fields(lead_id, utm_data)
+            all_filled = await amocrm.fill_missing_utm_fields(
+                lead_id, utm_data, raise_on_not_found=True
+            )
             if all_filled:
                 await redis.set(done_key, "1", ex=UTM_DONE_TTL_SEC)
                 await redis.delete(key)  # все поля заполнены — флаг больше не нужен
                 updated += 1
             # else: часть полей ещё пустая — оставляем флаг, попробуем позже
 
+        except LeadNotFoundError as e:
+            # Сделка удалена/слита в AmoCRM — это ПОСТОЯННАЯ ошибка, повтор
+            # никогда не поможет. Без этого флаг оставался бы навечно (TTL
+            # продлевается каждым новым входящим сообщением клиента), и
+            # воркер долбил бы AmoCRM по 3 попытки каждые 5 минут бесконечно.
+            logger.info(
+                "UTM backfill: lead %s not found in AmoCRM (deleted/merged), "
+                "removing flag, stop retrying: %s",
+                lead_id, e,
+            )
+            await redis.delete(key)
         except Exception as e:
             error_occurred = True
             logger.warning("UTM backfill failed for lead=%s: %s", lead_id, e)
