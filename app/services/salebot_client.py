@@ -103,6 +103,18 @@ class SalebotClient:
                                 f"Salebot API error {response.status}: {text[:200]}"
                             )
 
+                        # 400 с голым телом "ERROR" (без описания причины) наблюдается
+                        # как временное/непонятное состояние на стороне Salebot: один и тот
+                        # же client_id может через некоторое время снова начать принимать
+                        # сообщения без каких-либо изменений с нашей стороны. Причину они
+                        # не объясняют, поэтому даём шанс на повтор вместо немедленного
+                        # безвозвратного дропа. Остальные 4xx с содержательным телом
+                        # (реальная ошибка валидации запроса) по-прежнему не повторяем.
+                        if response.status == 400 and text.strip() == "ERROR":
+                            raise RetryableSalebotError(
+                                f"Salebot API error {response.status}: {text[:200]}"
+                            )
+
                         if response.status >= 400:
                             logger.error("Salebot API error %s: %s", response.status, text)
                             raise aiohttp.ClientError(
