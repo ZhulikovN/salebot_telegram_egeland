@@ -337,6 +337,48 @@ class ConversationStorage:
             )
             return True
 
+    async def update_salebot_client_id(
+        self, platform_id: str, bot_name: str, new_salebot_client_id: int
+    ) -> bool:
+        """
+        Обновить salebot_client_id диалога.
+
+        Вызывается как fallback когда Salebot вернул 404 client_not_found для
+        сохранённого id (сам client_id у Salebot со временем может поменяться
+        для того же platform_id — например, при их внутреннем слиянии
+        дублей клиента) — ищем актуальный через load_client() по platform_id
+        и сохраняем его сюда, чтобы не долбить мёртвый id повторно.
+
+        Args:
+            platform_id: Telegram ID клиента
+            bot_name: Название бота
+            new_salebot_client_id: Актуальный client_id, полученный от Salebot
+
+        Returns:
+            True если обновлено, False если запись не найдена
+        """
+        async with self.AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(Conversation).where(
+                    Conversation.platform_id == platform_id,
+                    Conversation.bot_name == bot_name,
+                )
+            )
+            conversation = result.scalars().first()
+            if not conversation:
+                return False
+            conversation.salebot_client_id = new_salebot_client_id
+            conversation.updated_at = datetime.now()
+            await session.commit()
+            logger.info(
+                "Conversation salebot_client_id updated: platform_id=%s, bot_name=%s, "
+                "new_salebot_client_id=%s",
+                platform_id,
+                bot_name,
+                new_salebot_client_id,
+            )
+            return True
+
     async def update_conversation_id(
         self, platform_id: str, bot_name: str, new_conversation_id: str
     ) -> bool:
