@@ -80,11 +80,12 @@ async def salebot_webhook(webhook: SalebotWebhook, request: Request) -> dict[str
 
         msg_preview = (webhook.message or "")[:50]
         logger.info(
-            "Salebot webhook: platform_id=%s, bot=%s, is_bot=%s, message=%r",
+            "Salebot webhook: platform_id=%s, bot=%s, is_bot=%s, message=%r, attachments=%r",
             webhook.platform_id,
             webhook.bot_name,
             is_bot,
             msg_preview,
+            webhook.attachments,
         )
 
         if not is_bot:
