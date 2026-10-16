@@ -613,7 +613,22 @@ class ConversationManager:
             # 429 внутри произвольного id/сообщения об ошибке.
             if (
                 any(code in str(e) for code in ("502", "503", "504"))
-                or isinstance(e, (aiohttp.ClientOSError, RateLimitAmoCRMError))
+                # Голый 500 (Internal Server Error) — тоже временный сбой на
+                # стороне AmoCRM/amojo ("An unknown error occurred"), а не
+                # ошибка валидации с нашей стороны. Проверяем через точный
+                # паттерн "error 500:" (как форматируют текст все raise в
+                # amocrm_client.py/amojo), а не голую подстроку "500" — иначе
+                # можно случайно поймать "500" внутри произвольного lead_id
+                # или другого числа в тексте ошибки.
+                or "error 500:" in str(e)
+                or isinstance(
+                    e,
+                    (
+                        aiohttp.ClientOSError,
+                        aiohttp.ServerDisconnectedError,
+                        RateLimitAmoCRMError,
+                    ),
+                )
             ):
                 raise RetryableAmoCRMError(str(e)) from e
             logger.error(
@@ -800,7 +815,16 @@ class ConversationManager:
             # 429 внутри произвольного id/сообщения об ошибке.
             if (
                 any(code in str(e) for code in ("502", "503", "504"))
-                or isinstance(e, (aiohttp.ClientOSError, RateLimitAmoCRMError))
+                # Голый 500 — см. комментарий в _create_new_conversation выше.
+                or "error 500:" in str(e)
+                or isinstance(
+                    e,
+                    (
+                        aiohttp.ClientOSError,
+                        aiohttp.ServerDisconnectedError,
+                        RateLimitAmoCRMError,
+                    ),
+                )
             ):
                 raise RetryableAmoCRMError(str(e)) from e
             logger.error(
@@ -869,7 +893,16 @@ class ConversationManager:
             # 429 внутри произвольного id/сообщения об ошибке.
             if (
                 any(code in str(e) for code in ("502", "503", "504"))
-                or isinstance(e, (aiohttp.ClientOSError, RateLimitAmoCRMError))
+                # Голый 500 — см. комментарий в _create_new_conversation выше.
+                or "error 500:" in str(e)
+                or isinstance(
+                    e,
+                    (
+                        aiohttp.ClientOSError,
+                        aiohttp.ServerDisconnectedError,
+                        RateLimitAmoCRMError,
+                    ),
+                )
             ):
                 raise RetryableAmoCRMError(str(e)) from e
             logger.error(
@@ -985,7 +1018,7 @@ class ConversationManager:
         conversation = await self.storage.get_by_platform_id(platform_id, bot_name)
 
         if not conversation:
-            logger.debug(
+            logger.info(
                 "No conversation for bot message, skipping: platform_id=%s, bot=%s",
                 platform_id,
                 bot_name,
@@ -1009,9 +1042,24 @@ class ConversationManager:
                 bot_name,
             )
 
-        valid_attachments = [
-            url for url in (attachments or []) if _is_valid_media_url(url)
-        ]
+        # Для бот-сообщений (дожимные из воронки) Salebot кладёт в attachments
+        # не ссылку строкой, а объект {"attachment_url": "...", "attachment_type": "..."}
+        # — в отличие от клиентских сообщений, где attachments уже список строк.
+        # Достаём ссылку из такого объекта перед проверкой на валидность.
+        valid_attachments = []
+        for raw in attachments or []:
+            url = raw.get("attachment_url") if isinstance(raw, dict) else raw
+            if _is_valid_media_url(url):
+                valid_attachments.append(url)
+            else:
+                logger.warning(
+                    "Skipping invalid bot attachment (not a URL): platform_id=%s, "
+                    "conversation=%s, bot=%s, value=%r",
+                    platform_id,
+                    conversation.conversation_id,
+                    bot_name,
+                    raw,
+                )
         for media_url in valid_attachments:
             try:
                 await self.amojo.send_incoming_message(
@@ -1043,7 +1091,7 @@ class ConversationManager:
                 )
 
         if not message_text and not valid_attachments:
-            logger.debug(
+            logger.info(
                 "Bot message had no text and no valid attachments, nothing sent: "
                 "platform_id=%s, bot=%s",
                 platform_id,
@@ -1156,12 +1204,68 @@ class ConversationManager:
             await self.storage.increment_message_count(conversation_id)
             return
 
-        await self.salebot.send_message(
-            client_id=conversation.salebot_client_id,
-            message=message_text or "",
-            attachment_url=public_media_url,
-            attachment_type=salebot_attachment_type if public_media_url else None,
-        )
+        try:
+            await self.salebot.send_message(
+                client_id=conversation.salebot_client_id,
+                message=message_text or "",
+                attachment_url=public_media_url,
+                attachment_type=salebot_attachment_type if public_media_url else None,
+            )
+        except Exception as e:
+            # client_not_found — client_id у Salebot мог поменяться для того же
+            # platform_id (например, после их внутреннего слияния дублей клиента),
+            # а у нас в БД остался старый, устаревший id. Ищем актуальный через
+            # load_client(platform_id, bot_name) и пробуем отправить ещё раз —
+            # только для этого конкретного случая, остальные ошибки Salebot
+            # (включая другие 4xx) не трогаем, пробрасываем как раньше.
+            if "client_not_found" not in str(e).lower():
+                raise
+            logger.warning(
+                "Salebot client_not_found for client_id=%s (platform_id=%s, bot=%s), "
+                "trying load_client to find current id: %s",
+                conversation.salebot_client_id,
+                conversation.platform_id,
+                conversation.bot_name,
+                e,
+            )
+            load_response = await self.salebot.load_client(
+                platform_id=int(conversation.platform_id),
+                group_id=conversation.bot_name,
+            )
+            items = load_response.get("items", []) if load_response else []
+            fresh_client_id = items[0].get("id") if items else None
+            if not fresh_client_id:
+                logger.error(
+                    "load_client found no current client_id for platform_id=%s, "
+                    "bot=%s — giving up, message lost",
+                    conversation.platform_id,
+                    conversation.bot_name,
+                )
+                raise
+
+            logger.info(
+                "Found fresh salebot_client_id=%s for platform_id=%s, bot=%s "
+                "(was %s), updating DB and retrying send",
+                fresh_client_id,
+                conversation.platform_id,
+                conversation.bot_name,
+                conversation.salebot_client_id,
+            )
+            await self.storage.update_salebot_client_id(
+                platform_id=conversation.platform_id,
+                bot_name=conversation.bot_name,
+                new_salebot_client_id=fresh_client_id,
+            )
+            conversation.salebot_client_id = fresh_client_id
+
+            # Повторяем отправку только один раз с новым id. Если упадёт снова —
+            # пусть падает как обычная ошибка, не плодим бесконечный цикл.
+            await self.salebot.send_message(
+                client_id=conversation.salebot_client_id,
+                message=message_text or "",
+                attachment_url=public_media_url,
+                attachment_type=salebot_attachment_type if public_media_url else None,
+            )
 
         logger.info(
             "Message sent to Salebot: client_id=%s, type=%s",
