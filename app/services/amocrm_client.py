@@ -739,7 +739,13 @@ class AmoCRMClient:
             logger.error("Error creating lead: %s", e)
             raise
 
-    async def move_lead(self, lead_id: int, pipeline_id: int, status_id: int) -> None:
+    async def move_lead(
+        self,
+        lead_id: int,
+        pipeline_id: int,
+        status_id: int,
+        raise_on_not_found: bool = False,
+    ) -> None:
         """
         Переместить сделку в другую воронку / этап.
 
@@ -747,6 +753,16 @@ class AmoCRMClient:
             lead_id: ID сделки
             pipeline_id: ID целевой воронки
             status_id: ID целевого этапа
+            raise_on_not_found: Если True — при ошибке "Lead not found" (сделка
+                удалена/слита через NOVA, например в гонке с get_lead чуть
+                раньше) поднять LeadNotFoundError вместо тихого логирования.
+                Нужно вызывающему коду, чтобы отличить "сделки больше нет,
+                нужно искать актуальную" от обычной временной ошибки сети.
+                По умолчанию False — поведение для остальных вызывающих
+                (diag_start-перенос) не меняется.
+
+        Raises:
+            LeadNotFoundError: если raise_on_not_found=True и сделка не найдена.
         """
         logger.info("Moving lead %s to pipeline=%s, status=%s", lead_id, pipeline_id, status_id)
         try:
@@ -757,6 +773,8 @@ class AmoCRMClient:
             )
             logger.info("Lead %s moved to pipeline=%s, status=%s", lead_id, pipeline_id, status_id)
         except Exception as e:
+            if raise_on_not_found and "not found" in str(e).lower():
+                raise LeadNotFoundError(str(e)) from e
             logger.warning("Failed to move lead %s: %s", lead_id, e)
 
     async def update_lead_enum(self, lead_id: int, field_id: int, enum_id: int) -> None:
