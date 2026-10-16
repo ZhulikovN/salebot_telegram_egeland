@@ -345,6 +345,7 @@ class SalebotClient:
         self,
         client_id: int,
         variables: dict[str, str],
+        retry: int = 3,
     ) -> None:
         """
         Сохранить переменные в профиль клиента Salebot.
@@ -352,11 +353,21 @@ class SalebotClient:
         POST https://chatter.salebot.pro/api/{API_KEY}/save_variables
         Body: {"client_id": 12345, "variables": {"amo_lead_id": "40547727"}}
 
-        Best-effort: ошибки логируются как warning, не прерывают основной поток.
+        Best-effort: после всех попыток ошибка только логируется как warning,
+        исключение наружу не поднимается — не прерывает основной поток.
+
+        Salebot периодически отдаёт 502/503/504 на этом эндпоинте — это
+        временные сбои на их стороне, а не ошибка формата запроса (проверено
+        отдельным изолированным тестом 16.10.2026: тот же самый запрос с тем
+        же телом, повторённый сразу после прод-502, отрабатывает нормально).
+        Поэтому, как и в send_message(), повторяем такие ошибки с
+        экспоненциальной задержкой — без ретрая запись amo_lead_id терялась
+        бы безвозвратно при каждом временном сбое на их стороне.
 
         Args:
             client_id: salebot_client_id (client.id из webhook, НЕ platform_id!)
             variables: словарь переменных для сохранения
+            retry: количество попыток при временных ошибках (502/503/504)
         """
         logger.info("Saving Salebot variables: client_id=%s, keys=%s", client_id, list(variables))
 
@@ -366,23 +377,51 @@ class SalebotClient:
             "variables": variables,
         }
 
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    url, json=payload, timeout=aiohttp.ClientTimeout(total=15)
-                ) as response:
-                    text = await response.text()
+        for attempt in range(retry):
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        url, json=payload, timeout=aiohttp.ClientTimeout(total=15)
+                    ) as response:
+                        text = await response.text()
 
-                    if response.status >= 400:
-                        logger.warning(
-                            "Salebot save_variables error %s: %s", response.status, text
-                        )
+                        if response.status >= 500:
+                            raise RetryableSalebotError(
+                                f"Salebot save_variables error {response.status}: {text[:200]}"
+                            )
+
+                        if response.status >= 400:
+                            logger.warning(
+                                "Salebot save_variables error %s: %s", response.status, text
+                            )
+                            return
+
+                        logger.info("Salebot variables saved: %s", response.status)
                         return
 
-                    logger.info("Salebot variables saved: %s", response.status)
-
-        except Exception as e:
-            logger.warning("Error saving Salebot variables (non-critical): %s", e)
+            except (RetryableSalebotError, asyncio.TimeoutError) as e:
+                logger.warning(
+                    "Salebot save_variables temporary error (attempt %d/%d): client_id=%s, %s",
+                    attempt + 1,
+                    retry,
+                    client_id,
+                    e,
+                )
+                if attempt < retry - 1:
+                    delay = 2**attempt
+                    await asyncio.sleep(delay)
+                    continue
+                logger.warning(
+                    "Error saving Salebot variables (non-critical, all %d attempts failed): "
+                    "client_id=%s, %s",
+                    retry,
+                    client_id,
+                    e,
+                )
+                return
+            except Exception as e:
+                logger.warning("Error saving Salebot variables (non-critical): %s", e)
+                return
 
     async def close(self) -> None:
         """Закрыть соединения (для совместимости, SalebotClient не держит постоянных соединений)."""
