@@ -192,6 +192,12 @@ class AmoCRMClient:
                 else:
                     raise ValueError(f"Unsupported HTTP method: {method}")
 
+            except LeadNotFoundError:
+                # Сделка/контакт не найдены (слиты/удалены) — ПОСТОЯННАЯ
+                # ошибка, повтор никогда не поможет. Не ретраим (экономим
+                # ~3-7 секунд и три лишних HTTP-запроса), сразу поднимаем
+                # вызывающему коду — WARNING уже залогирован в _handle_response.
+                raise
             except aiohttp.ClientError as e:
                 last_error = e
                 logger.error(
@@ -259,6 +265,21 @@ class AmoCRMClient:
             text = await response.text()
             logger.error("AmoCRM temporary error %s (retryable): %s", response.status, text[:200])
             raise RetryableAmoCRMError(f"API error {response.status}: {text[:200]}")
+
+        if response.status == 400:
+            text = await response.text()
+            if "not found" in text.lower():
+                # Сделка/контакт удалены или слиты NOVA — ПОСТОЯННАЯ ошибка
+                # (повтор никогда не поможет), и почти всегда ожидаемая —
+                # у вызывающего кода почти везде есть recovery через
+                # check_duplicate_lead (fill_missing_utm_fields,
+                # conversation_manager._resolve_lead_after_merge). WARNING,
+                # а не ERROR — чтобы не засорять лог там, где всё в итоге
+                # штатно восстанавливается.
+                logger.warning("AmoCRM entity not found (400): %s", text)
+                raise LeadNotFoundError(f"API error {response.status}: {text}")
+            logger.error("AmoCRM API error %s: %s", response.status, text)
+            raise aiohttp.ClientError(f"API error {response.status}: {text}")
 
         if response.status >= 400:
             text = await response.text()
@@ -563,26 +584,43 @@ class AmoCRMClient:
         self,
         contact_id: int,
         pipeline_id: int | None = None,
+        only_open: bool = True,
     ) -> dict[str, Any] | None:
         """
-        Найти открытую сделку контакта.
+        Найти сделку контакта.
 
-        Логика по ТЗ (п. 6.2–6.3):
+        Логика по ТЗ (п. 6.2–6.3) для only_open=True (по умолчанию, анти-дубликат
+        перед созданием новой сделки — см. _create_new_conversation/_reopen_conversation):
         - Дубль только если сделка принадлежит контакту И открытая
         - Если pipeline_id передан — ищем только в этой воронке
         - Если pipeline_id не передан — ищем по всем воронкам (сценарий после слияния контактов NOVA)
 
+        only_open=False — режим "поиск сделки-наследника после слияния NOVA"
+        (см. conversation_manager._resolve_lead_after_merge, fill_missing_utm_fields,
+        worker.py LEAD_EVENT): здесь задача не "избежать дубля", а "куда делась
+        сделка" — статус (открыта/закрыта) к этой задаче не имеет отношения,
+        наследник вполне может быть уже закрыт к моменту, когда мы спохватились
+        его искать. В этом режиме статус не фильтруется, но если среди
+        подходящих по контакту/воронке сделок есть хоть одна открытая —
+        предпочитаем её; если открытых нет совсем — берём "самую свежую" по
+        updated_at (а если он не возвращался — по id, т.к. id в amoCRM растут
+        монотонно по времени создания).
+
         Args:
             contact_id: ID контакта
             pipeline_id: ID воронки для проверки. Если None — поиск по всем воронкам.
+            only_open: True (по умолчанию) — отбрасывать закрытые сделки (анти-дубликат,
+                поведение не менялось). False — не фильтровать по статусу, искать
+                сделку-наследника после слияния (см. выше).
 
         Returns:
-            Данные открытой сделки-дубля или None
+            Данные сделки или None
         """
         logger.info(
-            "Searching for duplicate lead: contact=%s, pipeline=%s",
+            "Searching for duplicate lead: contact=%s, pipeline=%s, only_open=%s",
             contact_id,
             pipeline_id if pipeline_id is not None else "all",
+            only_open,
         )
 
         try:
@@ -603,6 +641,8 @@ class AmoCRMClient:
                 return None
 
             closed_statuses = {settings.STATUS_SUCCESS, settings.STATUS_CLOSED}
+
+            candidates: list[dict[str, Any]] = []
 
             for lead in leads:
                 # Проверяем что сделка принадлежит нашему контакту
@@ -628,28 +668,57 @@ class AmoCRMClient:
                     )
                     continue
 
-                # Проверяем что сделка открытая
                 status_id = lead.get("status_id")
-                if status_id in closed_statuses:
+                is_closed = status_id in closed_statuses
+
+                if only_open and is_closed:
                     logger.debug(
                         "Lead %s is closed (status=%s), skipping", lead["id"], status_id
                     )
                     continue
 
+                candidates.append(lead)
+
+            if not candidates:
                 logger.info(
-                    "Duplicate lead found: id=%s, pipeline=%s, status=%s",
-                    lead["id"],
-                    lead_pipeline_id,
-                    status_id,
+                    "No duplicate lead found for contact %s in pipeline %s",
+                    contact_id,
+                    pipeline_id if pipeline_id is not None else "all",
                 )
-                return lead
+                return None
+
+            if only_open:
+                # Как и раньше: первая подходящая открытая сделка в порядке ответа API.
+                chosen = candidates[0]
+            else:
+                open_candidates = [
+                    lead for lead in candidates
+                    if lead.get("status_id") not in closed_statuses
+                ]
+                if open_candidates:
+                    chosen = open_candidates[0]
+                else:
+                    # Все кандидаты закрыты — берём самую "свежую" (вероятнее
+                    # всего это и есть сделка-наследник в цепочке слияний).
+                    chosen = max(
+                        candidates,
+                        key=lambda lead: (lead.get("updated_at") or 0, lead.get("id") or 0),
+                    )
+                    logger.info(
+                        "check_duplicate_lead: only_open=False, all %d candidate(s) closed, "
+                        "picked most recent: id=%s, updated_at=%s",
+                        len(candidates),
+                        chosen.get("id"),
+                        chosen.get("updated_at"),
+                    )
 
             logger.info(
-                "No duplicate lead found for contact %s in pipeline %s",
-                contact_id,
-                pipeline_id if pipeline_id is not None else "all",
+                "Duplicate lead found: id=%s, pipeline=%s, status=%s",
+                chosen["id"],
+                chosen.get("pipeline_id"),
+                chosen.get("status_id"),
             )
-            return None
+            return chosen
 
         except Exception as e:
             logger.error("Error checking duplicate lead: %s", e)
@@ -772,12 +841,16 @@ class AmoCRMClient:
                 data=[{"id": lead_id, "pipeline_id": pipeline_id, "status_id": status_id}],
             )
             logger.info("Lead %s moved to pipeline=%s, status=%s", lead_id, pipeline_id, status_id)
+        except LeadNotFoundError:
+            if raise_on_not_found:
+                raise
+            logger.warning("Lead %s not found on move (likely merged)", lead_id)
         except Exception as e:
-            if raise_on_not_found and "not found" in str(e).lower():
-                raise LeadNotFoundError(str(e)) from e
-            logger.warning("Failed to move lead %s: %s", lead_id, e)
+            logger.error("Failed to move lead %s: %s", lead_id, e)
 
-    async def update_lead_enum(self, lead_id: int, field_id: int, enum_id: int) -> None:
+    async def update_lead_enum(
+        self, lead_id: int, field_id: int, enum_id: int, raise_on_not_found: bool = False
+    ) -> None:
         """
         Обновить select-поле сделки по enum_id.
 
@@ -785,6 +858,12 @@ class AmoCRMClient:
             lead_id: ID сделки
             field_id: ID поля типа select
             enum_id: ID варианта выбора
+            raise_on_not_found: Если True — при ошибке "Lead not found" поднять
+                LeadNotFoundError вместо тихого логирования (см. move_lead).
+                По умолчанию False — поведение для остальных вызывающих не меняется.
+
+        Raises:
+            LeadNotFoundError: если raise_on_not_found=True и сделка не найдена.
         """
         logger.info("Updating lead %s: field=%s enum=%s", lead_id, field_id, enum_id)
         try:
@@ -799,8 +878,12 @@ class AmoCRMClient:
                 }],
             )
             logger.info("Lead %s field=%s updated to enum=%s", lead_id, field_id, enum_id)
+        except LeadNotFoundError:
+            if raise_on_not_found:
+                raise
+            logger.warning("Lead %s not found on enum update (likely merged)", lead_id)
         except Exception as e:
-            logger.warning("Failed to update lead %s field=%s: %s", lead_id, field_id, e)
+            logger.error("Failed to update lead %s field=%s: %s", lead_id, field_id, e)
 
     async def update_lead(self, lead_id: int, fields: dict[int, Any]) -> None:
         """
@@ -830,24 +913,54 @@ class AmoCRMClient:
             await self._make_request("PATCH", "/leads", data=[lead_data])
             logger.info("Lead %s updated", lead_id)
 
+        except LeadNotFoundError as e:
+            # Постоянная, часто ожидаемая ошибка (сделка слита NOVA) —
+            # у вызывающего кода почти везде есть recovery. WARNING, не ERROR.
+            logger.warning("Lead %s not found on update: %s", lead_id, e)
+            raise
         except Exception as e:
-            logger.error("Error updating lead: %s", e)
+            logger.error("Error updating lead %s: %s", lead_id, e)
             raise
 
     async def fill_missing_utm_fields(
-        self, lead_id: int, utm_data: dict, raise_on_not_found: bool = False
+        self,
+        lead_id: int,
+        utm_data: dict,
+        raise_on_not_found: bool = False,
+        contact_id: int | None = None,
     ) -> bool:
         """
         Дозаполнить пустые UTM-поля сделки (first-touch: не перезаписывает уже заполненные).
 
+        Если сделка оказалась слита NOVA между GET и PATCH (GET по старому
+        lead_id ещё успевает пройти, а PATCH уже отвечает "not found") —
+        автоматически ищем выжившую сделку того же контакта через
+        check_duplicate_lead и дозаполняем метки прямо на ней. Никакой записи
+        в основную БД при этом не происходит (у этого клиента нет доступа к
+        storage) — lead_id в БД сам поправится при следующем сообщении
+        клиента через conversation_manager._reopen_conversation.
+
         Args:
             lead_id: ID сделки
             utm_data: UTM-метки {"utm_source": ..., "utm_medium": ..., ...}
-            raise_on_not_found: Если True — при ошибке "Lead not found" поднять
+            raise_on_not_found: Если True — при ошибке "Lead not found" (и если
+                не удалось найти сделку-дубль контакта) поднять
                 LeadNotFoundError вместо тихого return False. Нужно только
                 utm_backfill_worker, чтобы отличить "сделки больше нет, перестать
                 пытаться" от обычной временной ошибки. По умолчанию False —
                 поведение для остальных вызывающих (conversation_manager) не меняется.
+            contact_id: Опционально — заведомо верный ID контакта, если он уже
+                известен вызывающему (utm_backfill_worker передаёт его из
+                своего Redis-флага). Используется для поиска дубля ВМЕСТО
+                _embedded.contacts из GET-ответа — на практике для уже
+                сливающейся/слитой NOVA сделки GET успешно возвращает старые
+                custom_fields_values, но _embedded.contacts к этому моменту
+                уже пустой (контакт отвязывается от старой сделки раньше, чем
+                сама сделка пропадает из выдачи), поэтому полагаться на embed
+                в этом сценарии нельзя (подтверждено на проде 16.10.2026). Если
+                не передан — пробуем достать contact_id из embed как раньше
+                (работает для вызовов из conversation_manager, где lead_id
+                всегда свежий/только что найденный, а не потенциально стальной).
 
         Returns:
             True если после этого вызова ВСЕ 5 UTM-полей заполнены (можно больше
@@ -865,7 +978,9 @@ class AmoCRMClient:
         }
 
         try:
-            lead_response = await self._make_request("GET", f"/leads/{lead_id}")
+            lead_response = await self._make_request(
+                "GET", f"/leads/{lead_id}", params={"with": "contacts"}
+            )
             existing = self._parse_custom_fields(lead_response.get("custom_fields_values"))
 
             _EMPTY = {"none", "null", "undefined", ""}
@@ -876,18 +991,65 @@ class AmoCRMClient:
             }
 
             if fields_to_update:
-                await self.update_lead(lead_id, fields_to_update)
-                logger.info("UTM fields filled for lead %s: %s", lead_id, fields_to_update)
+                try:
+                    await self.update_lead(lead_id, fields_to_update)
+                    logger.info("UTM fields filled for lead %s: %s", lead_id, fields_to_update)
+                except LeadNotFoundError:
+                    resolved_contact_id = contact_id
+                    if not resolved_contact_id:
+                        contacts = lead_response.get("_embedded", {}).get("contacts", [])
+                        resolved_contact_id = contacts[0]["id"] if contacts else None
+                    if not resolved_contact_id:
+                        raise
+                    # Сделка слита NOVA между нашим GET и PATCH (GET успел
+                    # пройти по старому id, PATCH уже не нашёл сделку). Ищем
+                    # выжившую сделку этого же контакта и дозаполняем метки
+                    # прямо на ней через amoCRM API. В основную БД ничего не
+                    # пишем — это отдельный сервис без доступа к storage,
+                    # lead_id в БД сам поправится при следующем сообщении
+                    # клиента через conversation_manager._reopen_conversation.
+                    logger.info(
+                        "Lead %s not found on update (likely merged), searching "
+                        "duplicate for contact %s",
+                        lead_id, resolved_contact_id,
+                    )
+                    duplicate = await self.check_duplicate_lead(
+                        contact_id=resolved_contact_id, pipeline_id=None, only_open=False
+                    )
+                    if not duplicate:
+                        raise
+                    fresh_lead_id = duplicate["id"]
+                    existing = self._parse_custom_fields(duplicate.get("custom_fields_values"))
+                    fields_to_update = {
+                        field_id: value
+                        for field_id, value in fields_to_update.items()
+                        if not existing.get(field_id)
+                    }
+                    if fields_to_update:
+                        await self.update_lead(fresh_lead_id, fields_to_update)
+                        logger.info(
+                            "UTM fields filled for lead %s (duplicate of merged lead %s): %s",
+                            fresh_lead_id, lead_id, fields_to_update,
+                        )
 
             all_filled = all(
                 existing.get(field_id) or fields_to_update.get(field_id)
                 for field_id in utm_field_map
             )
             return all_filled
+        except LeadNotFoundError as e:
+            # Дошли сюда — значит восстановление НЕ помогло: дубль не
+            # нашёлся совсем (или не было contact_id, чтобы его искать).
+            # Это настоящая неудача, а не штатный race с NOVA.
+            if raise_on_not_found:
+                # utm_backfill_worker сам логирует и снимает флаг — не дублируем лог.
+                raise
+            logger.error(
+                "Lead %s not found and no duplicate could be resolved: %s", lead_id, e
+            )
+            return False
         except Exception as e:
-            if raise_on_not_found and "not found" in str(e).lower():
-                raise LeadNotFoundError(str(e)) from e
-            logger.warning("Failed to fill UTM fields for lead %s: %s", lead_id, e)
+            logger.error("Failed to fill UTM fields for lead %s: %s", lead_id, e)
             return False
 
     async def create_chat_in_amojo(
@@ -1089,13 +1251,21 @@ class AmoCRMClient:
             logger.error("Error linking chat to contact: %s", e)
             raise
 
-    async def add_lead_tag(self, lead_id: int, tag_id: int) -> None:
+    async def add_lead_tag(
+        self, lead_id: int, tag_id: int, raise_on_not_found: bool = False
+    ) -> None:
         """
         Добавить тег к сделке без удаления существующих тегов.
 
         Args:
             lead_id: ID сделки
             tag_id: ID тега в AmoCRM (постоянный, создаётся один раз вручную)
+            raise_on_not_found: Если True — при ошибке "Lead not found" поднять
+                LeadNotFoundError вместо тихого логирования (см. move_lead).
+                По умолчанию False — поведение для остальных вызывающих не меняется.
+
+        Raises:
+            LeadNotFoundError: если raise_on_not_found=True и сделка не найдена.
         """
         logger.info("Adding tag id=%s to lead %s", tag_id, lead_id)
         try:
@@ -1120,8 +1290,12 @@ class AmoCRMClient:
                 data=[{"id": lead_id, "_embedded": {"tags": tags_payload}}],
             )
             logger.info("Tag id=%s added to lead %s", tag_id, lead_id)
+        except LeadNotFoundError:
+            if raise_on_not_found:
+                raise
+            logger.warning("Lead %s not found on add_lead_tag (likely merged)", lead_id)
         except Exception as e:
-            logger.warning("Failed to add tag id=%s to lead %s: %s", tag_id, lead_id, e)
+            logger.error("Failed to add tag id=%s to lead %s: %s", tag_id, lead_id, e)
 
     async def add_lead_note(self, lead_id: int, text: str) -> None:
         """
