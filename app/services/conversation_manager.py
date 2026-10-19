@@ -13,7 +13,12 @@ from app.config.bot_routing import (
 )
 from app.services.partner_notify import notify_lead_created
 from app.db.storage import Conversation, get_conversation_storage
-from app.services.amocrm_client import AmoCRMClient, RateLimitAmoCRMError, RetryableAmoCRMError
+from app.services.amocrm_client import (
+    AmoCRMClient,
+    LeadNotFoundError,
+    RateLimitAmoCRMError,
+    RetryableAmoCRMError,
+)
 from app.services.amojo_client import AmojoClient, AmojoNotFoundError
 from app.services.media_proxy import download_and_proxy, download_media_bytes
 from app.services.salebot_client import SalebotClient
@@ -338,7 +343,13 @@ class ConversationManager:
 
         # UTM backfill: ставим Redis-флаг — utm_backfill_worker подхватит при
         # следующем проходе (≤5 мин). Работает для новых и возвращающихся клиентов.
-        # Ключ живёт 2 часа; значение = salebot_client_id (не нужен запрос в БД).
+        # Ключ живёт 2 часа; значение = "salebot_client_id:contact_id" (не нужен
+        # запрос в БД). contact_id передаём отдельно от lead_id, потому что при
+        # NOVA-слиянии GET /leads/{lead_id} на уже сливающуюся сделку может
+        # вернуть пустой _embedded.contacts (контакт отвязывается от старой
+        # сделки раньше, чем сама сделка пропадает из выдачи) — а здесь, в
+        # момент записи флага, conversation.contact_id гарантированно свежий
+        # и верный, поэтому отдаём его сразу, не полагаясь на amoCRM позже.
         # try/except обязателен: это вспомогательная фича, сбой Redis здесь
         # не должен ронять доставку сообщения клиента (см. _notify_manager_*).
         if conversation.lead_id:
@@ -346,7 +357,7 @@ class ConversationManager:
                 _redis = get_redis()
                 await _redis.set(
                     f"utm_check_needed:{conversation.lead_id}",
-                    str(salebot_client_id),
+                    f"{salebot_client_id}:{conversation.contact_id}",
                     ex=2 * 3600,
                 )
             except Exception as e:
@@ -426,14 +437,38 @@ class ConversationManager:
                 text_lower = message_text.lower()
                 for keyword, tag_id in bot_config.keywords:
                     if keyword in text_lower:
-                        await self.amocrm.add_lead_tag(conversation.lead_id, tag_id)
+                        try:
+                            await self.amocrm.add_lead_tag(
+                                conversation.lead_id, tag_id, raise_on_not_found=True
+                            )
+                        except LeadNotFoundError:
+                            fresh_lead_id = await self._resolve_lead_after_merge(
+                                old_lead_id=conversation.lead_id,
+                                conversation=conversation,
+                                platform_id=platform_id,
+                                bot_name=bot_name,
+                            )
+                            if fresh_lead_id:
+                                await self.amocrm.add_lead_tag(fresh_lead_id, tag_id)
 
         # Обновляем select-поля сделки по точному совпадению текста кнопки
         if message_text and conversation.lead_id:
             bot_config = get_bot_config(bot_name)
             for trigger_text, field_id, enum_id in bot_config.field_triggers:
                 if message_text == trigger_text:
-                    await self.amocrm.update_lead_enum(conversation.lead_id, field_id, enum_id)
+                    try:
+                        await self.amocrm.update_lead_enum(
+                            conversation.lead_id, field_id, enum_id, raise_on_not_found=True
+                        )
+                    except LeadNotFoundError:
+                        fresh_lead_id = await self._resolve_lead_after_merge(
+                            old_lead_id=conversation.lead_id,
+                            conversation=conversation,
+                            platform_id=platform_id,
+                            bot_name=bot_name,
+                        )
+                        if fresh_lead_id:
+                            await self.amocrm.update_lead_enum(fresh_lead_id, field_id, enum_id)
 
         # Перемещаем сделку в другую воронку по тексту кнопки (только один раз).
         # Используем current_lead из уже сделанного get_lead — без лишнего GET-запроса.
@@ -462,9 +497,29 @@ class ConversationManager:
                             break
                     if (current_pipeline_id != target_pipeline_id or
                         current_status_id != target_status_id):
-                        await self.amocrm.move_lead(
-                            conversation.lead_id, target_pipeline_id, target_status_id
-                        )
+                        try:
+                            await self.amocrm.move_lead(
+                                conversation.lead_id, target_pipeline_id, target_status_id,
+                                raise_on_not_found=True,
+                            )
+                        except LeadNotFoundError:
+                            # Сделку успели слить/удалить через NOVA в промежутке
+                            # между get_lead (выше, вернул ещё "живой" статус) и
+                            # этим move_lead — редкая гонка состояний. Ищем
+                            # актуальную (выжившую после слияния) сделку контакта
+                            # и повторяем перемещение один раз на правильном ID.
+                            fresh_lead_id = await self._resolve_lead_after_merge(
+                                old_lead_id=conversation.lead_id,
+                                conversation=conversation,
+                                platform_id=platform_id,
+                                bot_name=bot_name,
+                            )
+                            if fresh_lead_id:
+                                # move_lead без raise_on_not_found сам best-effort —
+                                # повторную ошибку просто залогирует, не бросит исключение.
+                                await self.amocrm.move_lead(
+                                    fresh_lead_id, target_pipeline_id, target_status_id
+                                )
                     else:
                         logger.debug(
                             "Lead %s already in pipeline %s status %s, skipping move",
@@ -475,6 +530,83 @@ class ConversationManager:
                     break
 
         return conversation.conversation_id
+
+    async def _resolve_lead_after_merge(
+        self,
+        old_lead_id: int,
+        conversation: Conversation,
+        platform_id: str,
+        bot_name: str,
+    ) -> int | None:
+        """
+        Best-effort поиск актуальной сделки после слияния NOVA.
+
+        Вызывается, когда очередная операция над conversation.lead_id (тег,
+        select-поле, перемещение по воронке) упала с LeadNotFoundError — то есть
+        сделку успели слить/удалить через NOVA в промежутке между get_lead (в
+        начале обработки сообщения, вернул ещё "живой" статус) и этой записью.
+        Это редкая гонка состояний, не ошибка в порядке действий бота.
+
+        Ищет сделку контакта по всем воронкам (pipeline_id=None — после слияния
+        сделка может оказаться в другой воронке), only_open=False — наследник
+        мог уже закрыться к моменту поиска, это не повод его не найти (см.
+        check_duplicate_lead). Обновляет lead_id диалога в БД и в самом объекте
+        conversation, чтобы последующие операции в этом же проходе (например,
+        несколько совпавших ключевых слов) сразу использовали уже верный ID
+        без повторного поиска.
+
+        Весь метод best-effort — любая ошибка здесь (например, временная
+        ошибка сети при поиске дубля) только логируется и не поднимается
+        дальше, чтобы не ронять обработку сообщения клиента.
+
+        Returns:
+            Новый lead_id, если найден, иначе None.
+        """
+        logger.info(
+            "Lead %s not found (race with NOVA merge?), searching for current lead: contact=%s",
+            old_lead_id,
+            conversation.contact_id,
+        )
+        try:
+            duplicate_lead = await self.amocrm.check_duplicate_lead(
+                contact_id=conversation.contact_id,
+                pipeline_id=None,
+                only_open=False,
+            )
+        except Exception as e:
+            # Настоящая неудача — сам поиск упал (не "не нашли", а ошибка запроса).
+            logger.error(
+                "Failed to search for current lead after merge for contact=%s: %s",
+                conversation.contact_id,
+                e,
+            )
+            return None
+
+        if not duplicate_lead:
+            # Настоящая неудача — искали и ничего не нашли, восстановиться не удалось.
+            logger.error(
+                "Lead %s not found and no duplicate found for contact=%s, giving up",
+                old_lead_id,
+                conversation.contact_id,
+            )
+            return None
+
+        fresh_lead_id = duplicate_lead["id"]
+        try:
+            await self.storage.update_lead_id(platform_id, bot_name, fresh_lead_id)
+        except Exception as e:
+            # Сделку нашли успешно, но не получилось записать результат в БД —
+            # тоже настоящая неудача (не получилось записать).
+            logger.error(
+                "Failed to persist resolved lead_id=%s for platform_id=%s, bot=%s: %s",
+                fresh_lead_id,
+                platform_id,
+                bot_name,
+                e,
+            )
+        conversation.lead_id = fresh_lead_id
+        logger.info("Lead %s resolved to %s after merge", old_lead_id, fresh_lead_id)
+        return fresh_lead_id
 
     async def _create_new_conversation(
         self,
