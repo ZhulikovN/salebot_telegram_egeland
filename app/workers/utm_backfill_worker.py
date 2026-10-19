@@ -19,6 +19,15 @@ utm_no_data:{lead_id} (1 час) кеширует пустой ответ Salebo
 Если задан UTM_AMO_ACCESS_TOKEN — сервис использует свой Bearer-токен и
 Redis-ключ "rate_limit:amocrm:utm" (свои 7 req/sec, независимые от воркера).
 
+NOVA-слияния: если сделка lead_id слилась между нашим GET и PATCH, поиск
+выжившего дубля и дозапись меток происходят внутри
+AmoCRMClient.fill_missing_utm_fields (через check_duplicate_lead) — целиком
+на стороне AmoCRM API. Этот сервис принципиально не импортирует app.db.storage
+и никогда не пишет в основную БД conversations — чтобы не создавать гонку с
+основными воркерами (worker.py), которые уже защищены своим Redis-локом
+lock:conversation:*. lead_id в БД сам поправится при следующем сообщении
+клиента через conversation_manager._reopen_conversation.
+
 Запуск как отдельный systemd-сервис (одна инстанция):
     python -m app.workers.utm_backfill_worker
 """
@@ -128,16 +137,25 @@ async def run_once(amocrm: AmoCRMClient, salebot: SalebotClient) -> None:
         if await redis.get(no_data_key):
             continue  # флаг оставляем — попробуем снова после истечения no_data
 
-        # Получаем salebot_client_id из значения ключа (записывается в conv_manager)
+        # Получаем salebot_client_id (и, если есть, contact_id) из значения
+        # ключа — записывается в conv_manager как "salebot_client_id:contact_id".
+        # contact_id нужен для recovery при NOVA-слиянии (см. fill_missing_utm_fields):
+        # он надёжнее, чем _embedded.contacts из GET на уже сливающуюся сделку.
         raw = await redis.get(key)
         if not raw:
             continue  # TTL истёк между SCAN и GET — не страшно
+        raw_str = raw.decode() if isinstance(raw, bytes) else raw
+        salebot_client_id_str, _, contact_id_str = raw_str.partition(":")
         try:
-            salebot_client_id = int(raw.decode() if isinstance(raw, bytes) else raw)
+            salebot_client_id = int(salebot_client_id_str)
         except (ValueError, AttributeError):
             logger.warning("UTM backfill: bad salebot_client_id in key %r, removing", key)
             await redis.delete(key)
             continue
+        try:
+            contact_id: int | None = int(contact_id_str) if contact_id_str else None
+        except ValueError:
+            contact_id = None
 
         checked += 1
         error_occurred = False
@@ -152,7 +170,7 @@ async def run_once(amocrm: AmoCRMClient, salebot: SalebotClient) -> None:
                 continue
 
             all_filled = await amocrm.fill_missing_utm_fields(
-                lead_id, utm_data, raise_on_not_found=True
+                lead_id, utm_data, raise_on_not_found=True, contact_id=contact_id
             )
             if all_filled:
                 await redis.set(done_key, "1", ex=UTM_DONE_TTL_SEC)
