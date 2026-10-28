@@ -42,9 +42,9 @@ logger = logging.getLogger(__name__)
 shutdown_requested = False
 
 # Максимальное количество повторных попыток при временных ошибках AmoCRM (502/503/504)
-_MAX_RETRY_ATTEMPTS = 5
+_MAX_RETRY_ATTEMPTS = 12
 # Задержка перед повторной попыткой (секунды)
-_RETRY_DELAY = 30
+_RETRY_DELAY = 60
 
 
 def handle_shutdown_signal(signum: int, frame: Any) -> None:
