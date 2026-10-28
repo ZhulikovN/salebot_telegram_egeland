@@ -1163,37 +1163,37 @@ class AmoCRMClient:
             raise
 
     async def link_chat_to_contact(
-        self, contact_id: int, chat_id: str, scope_id: str | None = None
+        self,
+        contact_id: int,
+        chat_id: str,
+        scope_id: str | None = None,
+        retry: int = 3,
     ) -> None:
         """
         Привязать чат к контакту через POST /api/v4/contacts/chats.
 
         ВАЖНО: Требует OAuth2 токен (access_token), а не long-lived токен!
 
+        Ретраится на транзиентных 5xx (502/503/504) и сетевых ошибках
+        экспоненциальным backoff (1с/2с/4с) — как и остальные вызовы через
+        _make_request. Раньше этот метод был единственным в клиенте без
+        внутреннего retry на 5xx (ретраилась только протухшая авторизация,
+        401): один-единственный 504 сразу убивал всю попытку привязки чата,
+        и внешний requeue (worker.py) пересоздавал чат в amojo с нуля на
+        каждом раунде, забивая amojo осиротевшими непривязанными чатами, а
+        при затяжном шторме 504 у AmoCRM сообщение терялось полностью, хотя
+        сама сделка была жива и привязка — идемпотентная операция, повтор с
+        тем же chat_id/contact_id ничего не портит.
+
         Args:
             contact_id: ID контакта в AmoCRM
             chat_id: ID чата из amojo (UUID)
             scope_id: Scope ID канала (по умолчанию из settings)
+            retry: Количество попыток на транзиентные ошибки
         """
         scope_id = scope_id or settings.AMOJO_SCOPE_ID
 
-        logger.info(
-            "Linking chat to contact: contact_id=%s, chat_id=%s, scope_id=%s",
-            contact_id,
-            chat_id,
-            scope_id,
-        )
-
-        # Получаем OAuth2 токен через TokenManager
-        token_manager = get_token_manager()
-        oauth_token = await token_manager.get_access_token()
-
         url = f"{settings.amocrm_api_url}/contacts/chats"
-
-        headers = {
-            "Authorization": f"Bearer {oauth_token}",
-            "Content-Type": "application/json",
-        }
 
         payload = [
             {
@@ -1203,53 +1203,99 @@ class AmoCRMClient:
             }
         ]
 
-        try:
-            await self._ensure_session()
-            await self._rate_limit()
+        # Получаем OAuth2 токен через TokenManager
+        token_manager = get_token_manager()
+        oauth_token = await token_manager.get_access_token()
 
-            async with self.session.post(
-                url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=30)
-            ) as response:
-                if response.status >= 400:
-                    text = await response.text()
-                    logger.error(
-                        "AmoCRM API error linking chat %s: %s", response.status, text
-                    )
+        await self._ensure_session()
 
-                    # Если токен истек (401) - пробуем обновить и повторить
-                    if response.status == 401:
-                        logger.info("OAuth token expired, refreshing...")
-                        oauth_token = await token_manager.refresh_access_token()
+        last_error: Exception | None = None
+        token_refreshed = False
 
-                        headers["Authorization"] = f"Bearer {oauth_token}"
+        for attempt in range(retry):
+            logger.info(
+                "Linking chat to contact (attempt %d/%d): contact_id=%s, chat_id=%s, scope_id=%s",
+                attempt + 1,
+                retry,
+                contact_id,
+                chat_id,
+                scope_id,
+            )
 
-                        async with self.session.post(
-                            url,
-                            headers=headers,
-                            json=payload,
-                            timeout=aiohttp.ClientTimeout(total=30),
-                        ) as retry_response:
-                            if retry_response.status >= 400:
-                                retry_text = await retry_response.text()
-                                logger.error(
-                                    "AmoCRM API error after token refresh %s: %s",
-                                    retry_response.status,
-                                    retry_text,
-                                )
-                                raise aiohttp.ClientError(
-                                    f"API error {retry_response.status}: {retry_text}"
-                                )
+            headers = {
+                "Authorization": f"Bearer {oauth_token}",
+                "Content-Type": "application/json",
+            }
 
-                            logger.info("Chat %s linked to contact %s", chat_id, contact_id)
-                            return
+            try:
+                await self._rate_limit()
 
-                    raise aiohttp.ClientError(f"API error {response.status}: {text}")
+                async with self.session.post(
+                    url,
+                    headers=headers,
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as response:
+                    if response.status >= 400:
+                        text = await response.text()
 
-                logger.info("Chat %s linked to contact %s", chat_id, contact_id)
+                        # Если токен истек (401) - обновляем и повторяем
+                        # немедленно, без backoff (это не транзиентный сбой
+                        # AmoCRM, а наша просроченная авторизация).
+                        if response.status == 401 and not token_refreshed:
+                            logger.info("OAuth token expired, refreshing...")
+                            token_refreshed = True
+                            oauth_token = await token_manager.refresh_access_token()
+                            continue
 
-        except Exception as e:
-            logger.error("Error linking chat to contact: %s", e)
-            raise
+                        logger.error(
+                            "AmoCRM API error linking chat %s: %s", response.status, text
+                        )
+                        last_error = aiohttp.ClientError(
+                            f"API error {response.status}: {text}"
+                        )
+
+                        if attempt == retry - 1:
+                            logger.error(
+                                "All %d retry attempts to link chat failed: "
+                                "contact_id=%s, chat_id=%s",
+                                retry,
+                                contact_id,
+                                chat_id,
+                            )
+                            raise last_error
+
+                        delay = 2**attempt
+                        logger.info("Retrying chat link in %d seconds...", delay)
+                        await asyncio.sleep(delay)
+                        continue
+
+                    logger.info("Chat %s linked to contact %s", chat_id, contact_id)
+                    return
+
+            except aiohttp.ClientError:
+                raise
+            except Exception as e:
+                last_error = e
+                logger.error(
+                    "Error linking chat to contact (attempt %d/%d): %s",
+                    attempt + 1,
+                    retry,
+                    e,
+                )
+                if attempt == retry - 1:
+                    raise
+                delay = 2**attempt
+                await asyncio.sleep(delay)
+
+        # Сюда попадаем, если последняя попытка ушла в "continue" из-за
+        # обновления токена (401 на самой последней итерации) — без этого
+        # fallback функция тихо вернула бы None (т.е. "успех"), хотя
+        # привязка на самом деле ни разу не подтвердилась.
+        raise last_error or aiohttp.ClientError(
+            f"Failed to link chat after {retry} attempts (token refresh consumed "
+            f"last retry): contact_id={contact_id}, chat_id={chat_id}"
+        )
 
     async def add_lead_tag(
         self, lead_id: int, tag_id: int, raise_on_not_found: bool = False
