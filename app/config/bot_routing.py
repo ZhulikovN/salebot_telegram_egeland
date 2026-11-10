@@ -414,6 +414,13 @@ _BOT_CONFIGS: dict[str, BotConfig] = {
         pipeline_triggers=_SALES_PIPELINE_TRIGGERS,
         stage_order=_TG_BOTS_STAGE_ORDER,
     ),
+    "el_asya_bot": BotConfig(
+        pipeline_id=9472270,
+        status_id=75778598,
+        lead_name="Заявка: TG - @el_asya_bot",
+        pipeline_triggers=_SALES_PIPELINE_TRIGGERS,
+        stage_order=_TG_BOTS_STAGE_ORDER,
+    ),
 }
 
 # Конфиг по умолчанию для всех остальных ботов (test_el_salebot и прочие)
